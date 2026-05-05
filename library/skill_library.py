@@ -25,7 +25,7 @@ class SkillLibrary:
         """ Add a certified skill to the library. """
 
         if self.cert_store is not None:
-            if not self.cert_store.has_certificate(certificate.certificate_id):
+            if not self.cert_store.contains(certificate.skill_id):
                 return False
 
         entry = SkillEntry(
