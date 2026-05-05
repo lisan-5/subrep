@@ -7,3 +7,4 @@ python-dotenv>=1.0.0
 hyperon>=0.2.0
 swig
 gymnasium[box2d]
+matplotlib>=3.7.0
