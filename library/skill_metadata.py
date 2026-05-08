@@ -1,48 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
-
-
-@dataclass
-class Certificate:
-    """ Python-side summary of a certification gate result. """
-    skill_id: str
-    gate_type: str
-    delta_r: float  
-    delta_n: List[float] = field(default_factory=list)
-    admission_margin: float = 0.0
-    epsilon: float = 0.0
-
-    def __post_init__(self) -> None:
-        """Validate that gate_type is one of the two legal values."""
-        valid_gates = {"CDS", "PDS"}
-        if self.gate_type not in valid_gates:
-            raise ValueError(
-                f"gate_type must be one of {valid_gates}, got '{self.gate_type}'"
-            )
-
-    def to_dict(self) -> dict:
-        """ Convert to a JSON-safe dictionary. """
-        return {
-            "skill_id": self.skill_id,
-            "gate_type": self.gate_type,
-            "delta_r": float(self.delta_r),
-            "delta_n": [float(v) for v in self.delta_n],
-            "admission_margin": float(self.admission_margin),
-            "epsilon": float(self.epsilon),
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> Certificate:
-        """Reconstruct a Certificate from a JSON-loaded dictionary."""
-        return cls(
-            skill_id=data["skill_id"],
-            gate_type=data["gate_type"],
-            delta_r=float(data["delta_r"]),
-            delta_n=[float(v) for v in data["delta_n"]],
-            admission_margin=float(data.get("admission_margin", 0.0)),
-            epsilon=float(data.get("epsilon", 0.0)),
-        )
+from certification.certificate_schema import Certificate
 
 @dataclass
 class SkillEntry:
@@ -75,7 +34,7 @@ class SkillEntry:
         return self.certificate.delta_r
 
     @property
-    def delta_n(self) -> List[float]:
+    def delta_n(self) -> tuple[float, float]:
         """Motive improvement vector from the certificate."""
         return self.certificate.delta_n
 
