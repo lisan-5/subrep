@@ -13,17 +13,18 @@ Verifies the full lifecycle of the SubRep Skill Library:
 
 import numpy as np
 import pytest
+from datetime import datetime
 
-from library.skill_metadata import Certificate, SkillEntry
+from certification.certificate_schema import Certificate
+from library.skill_metadata import SkillEntry
 from library.skill_library import SkillLibrary
 from library.skill_selector import SkillSelector
-
 
 def make_dummy_policy(action: int = 0):
     """Create a simple deterministic policy that always returns `action`."""
     return lambda obs: action
 
-def make_cds_certificate(cert_id: str = "cert-cds-001"):
+def make_cds_certificate(skill_id: str = "cert-cds-001"):
     """
     Create a CDS certificate for a universally beneficial skill.
 
@@ -31,29 +32,43 @@ def make_cds_certificate(cert_id: str = "cert-cds-001"):
     Passes CDS because Δr + min(Δn) ≥ 0.
     """
     return Certificate(
-        skill_id=cert_id,
+        skill_id=skill_id,
         gate_type="CDS",
         delta_r=0.5,
-        delta_n=[0.3, 0.2],
+        delta_n=(0.3, 0.2),
         admission_margin=0.7,
         epsilon=0.0,
+        timestamp=datetime.now().isoformat(),
+        seed=42,
+        gamma=0.99,
+        baseline_id="baseline-noop",
+        environment="MO-LunarLander-v2",
+        episode_length=200,
+        version="0.1.0",
     )
 
-def make_pds_certificate(cert_id: str = "cert-pds-001"):
+def make_pds_certificate(skill_id: str = "cert-pds-001"):
     """
     Create a PDS certificate for a trade-off skill.
 
-    Δr=0.5, Δn=[0.8, -0.6], ε=0.1
+    Δr=0.5, Δn=(0.8, -0.6), ε=0.1
     margin = 0.5 + (-0.6) + 0.1 = 0.0  (exactly at boundary)
     Passes PDS because Δr + min(Δn) ≥ -ε.
     """
     return Certificate(
-        skill_id=cert_id,
+        skill_id=skill_id,
         gate_type="PDS",
         delta_r=0.5,
-        delta_n=[0.8, -0.6],
+        delta_n=(0.8, -0.6),
         admission_margin=0.0,
         epsilon=0.1,
+        timestamp=datetime.now().isoformat(),
+        seed=42,
+        gamma=0.99,
+        baseline_id="baseline-noop",
+        environment="MO-LunarLander-v2",
+        episode_length=200,
+        version="0.1.0",
     )
 
 def build_populated_library():
@@ -81,24 +96,18 @@ def test_skill_entry_creation():
 
     assert entry.skill_id == "skill-1"
     assert entry.gate_type == "CDS"
-    assert entry.delta_r == 0.5           
-    assert entry.delta_n == [0.3, 0.2]    
-    assert entry.admission_margin == 0.7  
-    assert entry.executions == 0          
+    assert entry.delta_r == 0.5
+    assert entry.delta_n == (0.3, 0.2)
+    assert entry.admission_margin == 0.7
+    assert entry.executions == 0
     assert entry.policy is not None
 
 
 def test_skill_entry_rejects_invalid_gate_type():
     """SkillEntry should reject gate types other than CDS/PDS."""
-    cert = Certificate(
-        skill_id="bad",
-        gate_type="CDS",   
-        delta_r=0.5,
-        delta_n=[0.1],
-    )
+    cert = make_cds_certificate()
 
     with pytest.raises(ValueError, match="gate_type"):
-        # entry gate_type is wrong
         SkillEntry(skill_id="x", gate_type="INVALID", certificate=cert)
 
 
@@ -142,7 +151,21 @@ def test_skill_entry_to_dict_roundtrip():
 def test_certificate_rejects_invalid_gate_type():
     """Certificate should reject gate types other than CDS/PDS."""
     with pytest.raises(ValueError, match="gate_type"):
-        Certificate(skill_id="x", gate_type="XYZ", delta_r=0.0)
+        Certificate(
+            skill_id="x",
+            gate_type="XYZ",
+            delta_r=0.0,
+            delta_n=(0.0, 0.0),
+            admission_margin=0.0,
+            epsilon=0.0,
+            timestamp=datetime.now().isoformat(),
+            seed=42,
+            gamma=0.99,
+            baseline_id="baseline-noop",
+            environment="MO-LunarLander-v2",
+            episode_length=200,
+            version="0.1.0",
+        )
 
 
 def test_certificate_to_dict_roundtrip():
@@ -156,6 +179,11 @@ def test_certificate_to_dict_roundtrip():
     assert np.isclose(restored.delta_r, cert.delta_r)
     assert restored.delta_n == cert.delta_n
     assert np.isclose(restored.epsilon, cert.epsilon)
+    # Verify audit fields survive the roundtrip
+    assert restored.seed == cert.seed
+    assert restored.gamma == cert.gamma
+    assert restored.baseline_id == cert.baseline_id
+    assert restored.environment == cert.environment
 
 
 # Add / Get / Remove Tests
@@ -204,11 +232,11 @@ def test_add_noncertified_skill_rejected():
     lib = SkillLibrary(cert_store=store)
 
     # Known certificate → accepted
-    known_cert = make_cds_certificate(cert_id="cert-known")
+    known_cert = make_cds_certificate(skill_id="cert-known")
     assert lib.add_skill("good", known_cert, make_dummy_policy()) is True
 
     # Unknown certificate → rejected
-    unknown_cert = make_cds_certificate(cert_id="cert-unknown")
+    unknown_cert = make_cds_certificate(skill_id="cert-unknown")
     assert lib.add_skill("bad", unknown_cert, make_dummy_policy()) is False
     assert lib.count() == 1  # only the good one
 
@@ -289,7 +317,7 @@ def test_query_by_weights_cds_always_admissible():
 def test_query_by_weights_pds_depends_on_weights():
     """PDS skills should only pass for weight vectors where Δr + w^T·Δn ≥ -ε."""
     lib = SkillLibrary()
-    # PDS cert: Δr=0.5, Δn=[0.8, -0.6], ε=0.1
+    # PDS cert: Δr=0.5, Δn=(0.8, -0.6), ε=0.1
     lib.add_skill("pds-skill", make_pds_certificate(), make_dummy_policy())
 
     # w=[0.5, 0.5]: score = 0.5 + 0.5*0.8 + 0.5*(-0.6) = 0.5 + 0.1 = 0.6 ≥ -0.1 → Pass
@@ -312,9 +340,16 @@ def test_query_by_weights_pds_rejected():
         skill_id="cert-hard-pds",
         gate_type="PDS",
         delta_r=0.3,
-        delta_n=[0.8, -0.6],
+        delta_n=(0.8, -0.6),
         admission_margin=0.0,
         epsilon=0.1,
+        timestamp=datetime.now().isoformat(),
+        seed=42,
+        gamma=0.99,
+        baseline_id="baseline-noop",
+        environment="MO-LunarLander-v2",
+        episode_length=200,
+        version="0.1.0",
     )
     lib.add_skill("hard-pds", bad_cert, make_dummy_policy())
 
@@ -392,8 +427,11 @@ def test_loaded_skills_preserve_data(tmp_path):
 
     assert entry.gate_type == "PDS"
     assert np.isclose(entry.delta_r, 0.5)
-    assert entry.delta_n == [0.8, -0.6]
+    assert entry.delta_n == (0.8, -0.6)
     assert np.isclose(entry.epsilon, 0.1)
+    # Verify audit fields survive the roundtrip
+    assert entry.certificate.seed == 42
+    assert entry.certificate.environment == "MO-LunarLander-v2"
 
 
 def test_register_policy_after_load(tmp_path):
@@ -517,9 +555,16 @@ def test_certification_to_library_flow():
         skill_id="cert-int-a",
         gate_type="CDS",
         delta_r=skill_a_r,
-        delta_n=skill_a_n.tolist(),
+        delta_n=tuple(skill_a_n.tolist()),
         admission_margin=cds_gate.get_admission_margin(skill_a_r, skill_a_n),
         epsilon=0.0,
+        timestamp=datetime.now().isoformat(),
+        seed=42,
+        gamma=0.99,
+        baseline_id="baseline-noop",
+        environment="MO-LunarLander-v2",
+        episode_length=200,
+        version="0.1.0",
     )
 
     # Skill B: trade-off → fails CDS, passes PDS
@@ -527,12 +572,19 @@ def test_certification_to_library_flow():
     assert cds_gate.admit(skill_b_r, skill_b_n) is False
     assert pds_gate.admit(skill_b_r, skill_b_n) is True
     cert_b = Certificate(
-        skill_id="cert-int-a",
+        skill_id="cert-int-b",
         gate_type="PDS",
         delta_r=skill_b_r,
-        delta_n=skill_b_n.tolist(),
+        delta_n=tuple(skill_b_n.tolist()),
         admission_margin=pds_gate.get_admission_margin(skill_b_r, skill_b_n),
         epsilon=pds_gate.get_epsilon(),
+        timestamp=datetime.now().isoformat(),
+        seed=42,
+        gamma=0.99,
+        baseline_id="baseline-noop",
+        environment="MO-LunarLander-v2",
+        episode_length=200,
+        version="0.1.0",
     )
 
     # Build library
