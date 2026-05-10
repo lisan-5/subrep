@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from utils.mdn_logging import build_decision_record
+from utils.mdn_data_adapter import records_to_prepared_candidate_outcomes
 from utils.mdn_record_builder import (
     PreparedCandidateOutcome,
     build_candidate_skill_records,
@@ -107,7 +108,7 @@ def train_mdn_from_prepared_outcomes(
     device: Optional[str] = None,
     payoff_weight: float = 0.0,
 ) -> dict[str, float | str]:
-    """Build records from prepared outcomes, then train MDN offline."""
+    """Build decision records from prepared outcomes, then train MDN offline."""
     records = build_records_from_prepared_candidate_outcomes(
         prepared_outcomes=prepared_outcomes,
         baseline_stats=baseline_stats,
@@ -117,6 +118,28 @@ def train_mdn_from_prepared_outcomes(
         payoff_weight=payoff_weight,
     )
     return train_mdn_from_records(records, checkpoint_path=checkpoint_path, seed=seed, device=device)
+
+
+def train_mdn_from_rollout_records(
+    *,
+    rollout_records: Iterable[dict[str, Any]],
+    baseline_stats: dict[str, Any],
+    checkpoint_path: str = "models/mdn_policy_best.pth",
+    seed: int = 0,
+    device: Optional[str] = None,
+    payoff_weight: float = 0.0,
+) -> dict[str, float | str]:
+    """Adapt rollout-style records into prepared outcomes, then train MDN offline.
+    """
+    prepared_outcomes = records_to_prepared_candidate_outcomes(rollout_records)
+    return train_mdn_from_prepared_outcomes(
+        prepared_outcomes=prepared_outcomes,
+        baseline_stats=baseline_stats,
+        checkpoint_path=checkpoint_path,
+        seed=seed,
+        device=device,
+        payoff_weight=payoff_weight,
+    )
 
 
 def train() -> None:
