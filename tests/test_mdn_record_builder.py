@@ -3,9 +3,11 @@ from __future__ import annotations
 import numpy as np
 
 from utils.mdn_record_builder import (
+    PreparedCandidateOutcome,
     build_candidate_skill_record,
     build_candidate_skill_records,
     build_decision_record_from_outcome,
+    group_candidate_outcomes_by_context,
 )
 
 
@@ -48,6 +50,21 @@ def test_build_candidate_skill_record_supports_pds_epsilon():
     assert np.isclose(record.epsilon, 0.2)
 
 
+def test_prepared_candidate_outcome_normalizes_context_and_preserves_metadata():
+    outcome = PreparedCandidateOutcome(
+        context=np.array([0.1] * 14, dtype=np.float32),
+        skill_id="skill_a",
+        payoff=1.7,
+        motives=(0.8, 0.4),
+        metadata={"source": "prepared"},
+        gate_type="cds",
+    )
+
+    assert len(outcome.context) == 14
+    assert outcome.gate_type == "CDS"
+    assert outcome.metadata["source"] == "prepared"
+
+
 def test_build_candidate_skill_records_rejects_missing_outcome_fields():
     try:
         build_candidate_skill_records(
@@ -61,11 +78,59 @@ def test_build_candidate_skill_records_rejects_missing_outcome_fields():
         raise AssertionError("Expected ValueError for missing skill outcome fields")
 
 
+def test_build_candidate_skill_records_accepts_prepared_outcomes():
+    outcomes = (
+        PreparedCandidateOutcome(
+            context=(0.1,) * 14,
+            skill_id="skill_a",
+            payoff=1.7,
+            motives=(0.8, 0.4),
+        ),
+        PreparedCandidateOutcome(
+            context=(0.1,) * 14,
+            skill_id="skill_b",
+            payoff=1.1,
+            motives=(0.3, 0.7),
+        ),
+    )
+
+    records = build_candidate_skill_records(skill_outcomes=outcomes, baseline_stats=_baseline_stats())
+
+    assert len(records) == 2
+    assert records[0].skill_id == "skill_a"
+
+
+def test_group_candidate_outcomes_by_context_groups_records_correctly():
+    context_a = PreparedCandidateOutcome(context=(0.1,) * 14, skill_id="skill_a", payoff=1.7, motives=(0.8, 0.4)).context
+    context_b = PreparedCandidateOutcome(context=(0.2,) * 14, skill_id="skill_c", payoff=1.4, motives=(0.5, 0.6)).context
+    outcomes = (
+        PreparedCandidateOutcome(context=context_a, skill_id="skill_a", payoff=1.7, motives=(0.8, 0.4)),
+        PreparedCandidateOutcome(context=context_a, skill_id="skill_b", payoff=1.1, motives=(0.3, 0.7)),
+        PreparedCandidateOutcome(context=context_b, skill_id="skill_c", payoff=1.4, motives=(0.5, 0.6)),
+    )
+
+    grouped = group_candidate_outcomes_by_context(outcomes)
+
+    assert len(grouped) == 2
+    assert len(grouped[context_a]) == 2
+    assert len(grouped[context_b]) == 1
+
+
 def test_build_decision_record_from_outcome_produces_valid_record():
     candidate_skills = build_candidate_skill_records(
         skill_outcomes=(
-            {"skill_id": "skill_a", "payoff": 1.7, "motives": np.array([0.8, 0.4], dtype=np.float32)},
-            {"skill_id": "skill_b", "payoff": 1.1, "motives": np.array([0.3, 0.7], dtype=np.float32)},
+            PreparedCandidateOutcome(
+                context=(0.1,) * 14,
+                skill_id="skill_a",
+                payoff=1.7,
+                motives=(0.8, 0.4),
+            ),
+            PreparedCandidateOutcome(
+                context=(0.1,) * 14,
+                skill_id="skill_b",
+                payoff=1.1,
+                motives=(0.3, 0.7),
+            ),
         ),
         baseline_stats=_baseline_stats(),
     )
