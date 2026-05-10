@@ -115,5 +115,14 @@ def test_behavior_context_switched_training_learns_different_preferences():
     safety_weights = _mean_weights_for_context(model, 0.1)
     fuel_weights = _mean_weights_for_context(model, 0.2)
 
-    assert safety_weights[0] > safety_weights[1]
-    assert fuel_weights[1] > fuel_weights[0]
+    safety_target = np.array([0.8, 0.2], dtype=np.float32)
+    fuel_target = np.array([0.2, 0.8], dtype=np.float32)
+    initial_weights = np.array([0.5, 0.5], dtype=np.float32)
+
+    safety_initial_distance = float(np.linalg.norm(initial_weights - safety_target))
+    fuel_initial_distance = float(np.linalg.norm(initial_weights - fuel_target))
+    safety_final_distance = float(np.linalg.norm(safety_weights - safety_target))
+    fuel_final_distance = float(np.linalg.norm(fuel_weights - fuel_target))
+
+    assert safety_final_distance < safety_initial_distance
+    assert fuel_final_distance < fuel_initial_distance
