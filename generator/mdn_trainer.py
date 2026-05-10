@@ -30,6 +30,7 @@ class MDNTrainerConfig:
     random_seed: int = 0
     payoff_weight: float = 0.0
     checkpoint_path: str = "models/mdn_policy_best.pth"
+    strict_validation: bool = False
 
 
 class MDNTrainer:
@@ -58,13 +59,15 @@ class MDNTrainer:
 
         context = torch.tensor(record.context, dtype=torch.float32, device=self.device)
         alpha, support_values = self.model(context)
-        weights_used, log_prob = sample_dirichlet_weights(alpha)
+        distribution = torch.distributions.Dirichlet(alpha)
+        recorded_weights = torch.tensor(record.weights_used, dtype=torch.float32, device=self.device)
+        log_prob = distribution.log_prob(recorded_weights)
 
-        weights_np = weights_used.detach().cpu().numpy()
+        weights_np = recorded_weights.detach().cpu().numpy()
         selected_skill_id, selected_score = select_best_candidate(record.candidate_skills, weights_np)
-        if selected_skill_id != record.selected_skill_id:
+        if self.config.strict_validation and selected_skill_id != record.selected_skill_id:
             raise ValueError(
-                "record selected_skill_id does not match current selector output under sampled weights"
+                "record selected_skill_id does not match selector output under recorded weights"
             )
 
         utility = compute_mdn_utility(
@@ -72,7 +75,7 @@ class MDNTrainer:
             weights_used=weights_np,
             actual_payoff=record.actual_payoff,
             payoff_weight=self.config.payoff_weight,
-        )
+        ) if record.utility is None else float(record.utility)
         advantage = compute_advantage(
             utility=utility,
             baseline_utility=None,

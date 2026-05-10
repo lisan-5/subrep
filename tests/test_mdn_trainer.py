@@ -94,6 +94,102 @@ def test_trainer_requires_actual_motives_for_offline_training():
         raise AssertionError("Expected ValueError when actual_motives are missing")
 
 
+def test_trainer_uses_recorded_weights_without_resampling_selector_alignment():
+    torch.manual_seed(0)
+    model = MotiveDecompositionNetwork()
+    trainer = MDNTrainer(model, config=MDNTrainerConfig(strict_validation=False), device="cpu")
+    record = MDNDecisionRecord(
+        context=(0.1,) * 14,
+        alpha=(2.0, 3.0),
+        support_values=(0.7, 0.3),
+        weights_used=(0.95, 0.05),
+        candidate_skills=(
+            CandidateSkillRecord(
+                skill_id="safe_skill",
+                delta_r=0.2,
+                delta_n=(0.8, 0.1),
+                is_certified=True,
+                gate_type="CDS",
+            ),
+            CandidateSkillRecord(
+                skill_id="fuel_skill",
+                delta_r=0.2,
+                delta_n=(0.1, 0.8),
+                is_certified=True,
+                gate_type="CDS",
+            ),
+        ),
+        selected_skill_id="fuel_skill",
+        actual_payoff=1.0,
+        actual_motives=(0.9, 0.1),
+    )
+
+    metrics = trainer.training_step(record)
+
+    assert torch.isfinite(torch.tensor(metrics["loss"]))
+
+
+def test_trainer_respects_recorded_utility_when_present():
+    torch.manual_seed(0)
+    model = MotiveDecompositionNetwork()
+    trainer = MDNTrainer(model, config=MDNTrainerConfig(), device="cpu")
+    record = _decision_record()
+    record = MDNDecisionRecord(
+        context=record.context,
+        alpha=record.alpha,
+        support_values=record.support_values,
+        weights_used=record.weights_used,
+        candidate_skills=record.candidate_skills,
+        selected_skill_id=record.selected_skill_id,
+        selected_score=record.selected_score,
+        actual_payoff=record.actual_payoff,
+        actual_motives=record.actual_motives,
+        utility=5.0,
+    )
+
+    metrics = trainer.training_step(record)
+
+    assert metrics["utility"] == 5.0
+
+
+def test_trainer_strict_validation_catches_selected_skill_mismatch():
+    torch.manual_seed(0)
+    model = MotiveDecompositionNetwork()
+    trainer = MDNTrainer(model, config=MDNTrainerConfig(strict_validation=True), device="cpu")
+    record = MDNDecisionRecord(
+        context=(0.1,) * 14,
+        alpha=(2.0, 3.0),
+        support_values=(0.7, 0.3),
+        weights_used=(0.95, 0.05),
+        candidate_skills=(
+            CandidateSkillRecord(
+                skill_id="safe_skill",
+                delta_r=0.2,
+                delta_n=(0.8, 0.1),
+                is_certified=True,
+                gate_type="CDS",
+            ),
+            CandidateSkillRecord(
+                skill_id="fuel_skill",
+                delta_r=0.2,
+                delta_n=(0.1, 0.8),
+                is_certified=True,
+                gate_type="CDS",
+            ),
+        ),
+        selected_skill_id="fuel_skill",
+        actual_payoff=1.0,
+        actual_motives=(0.9, 0.1),
+    )
+
+    try:
+        trainer.training_step(record)
+    except ValueError as exc:
+        assert "selected_skill_id" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for strict selector mismatch")
+
+
 def test_trainer_checkpoint_round_trip(tmp_path: Path):
     torch.manual_seed(0)
     model = MotiveDecompositionNetwork()
