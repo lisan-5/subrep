@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from generator.mdn_auxiliary import MDNAuxiliaryModel
+from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_auxiliary_trainer import (
     AuxiliaryTrainingRecord,
     MDNAuxiliaryTrainer,
@@ -28,10 +28,10 @@ def train_auxiliary_from_records(
     num_motives = len(records[0].q_target)
     num_skills = max(record.skill_id for record in records) + 1
 
-    model = MDNAuxiliaryModel(
-        context_dim=context_dim,
+    model = MotiveDecompositionNetwork(
+        input_dim=context_dim,
         num_skills=num_skills,
-        num_motives=num_motives,
+        num_objectives=num_motives,
     )
     trainer = MDNAuxiliaryTrainer(
         model,

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from generator.mdn_auxiliary import MDNAuxiliaryModel
+from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_auxiliary_trainer import MDNAuxiliaryTrainer, MDNAuxiliaryTrainerConfig, build_auxiliary_record
 from generator.train_mdn_auxiliary import train_auxiliary_from_records
 
@@ -67,12 +67,12 @@ def make_scenario_records(mode: str, num_records: int, use_ips: bool = False):
 
 def initial_outputs(seed: int):
     seed_everything(seed)
-    model = MDNAuxiliaryModel(context_dim=14, num_skills=8, num_motives=2)
+    model = MotiveDecompositionNetwork(input_dim=14, num_skills=8, num_objectives=2)
     model.eval()
     with torch.no_grad():
-        safety_gate, safety_q = model(torch.tensor((0.1,) * 14, dtype=torch.float32), torch.tensor(1))
-        fuel_gate, fuel_q = model(torch.tensor((0.9,) * 14, dtype=torch.float32), torch.tensor(2))
-        balanced_gate, balanced_q = model(torch.tensor((0.5,) * 14, dtype=torch.float32), torch.tensor(1))
+        safety_gate, safety_q = model.forward_auxiliary(torch.tensor((0.1,) * 14, dtype=torch.float32), torch.tensor(1))
+        fuel_gate, fuel_q = model.forward_auxiliary(torch.tensor((0.9,) * 14, dtype=torch.float32), torch.tensor(2))
+        balanced_gate, balanced_q = model.forward_auxiliary(torch.tensor((0.5,) * 14, dtype=torch.float32), torch.tensor(1))
     return {
         "safety_gate": float(torch.sigmoid(safety_gate).item()),
         "fuel_gate": float(torch.sigmoid(fuel_gate).item()),
@@ -85,19 +85,18 @@ def initial_outputs(seed: int):
 
 def checkpoint_round_trip(seed: int):
     seed_everything(seed)
-    model = MDNAuxiliaryModel(context_dim=14, num_skills=8, num_motives=2)
+    model = MotiveDecompositionNetwork(input_dim=14, num_skills=8, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(model, config=MDNAuxiliaryTrainerConfig(), device="cpu")
     trainer.train_records(make_scenario_records("safety", 8))
     with tempfile.TemporaryDirectory() as temp_dir:
         checkpoint_path = Path(temp_dir) / "mdn_aux_diag.pt"
-        result = trainer.train_records(make_scenario_records("safety", 8))
         trainer_state = trainer.model.state_dict()
         torch.save({"model_state_dict": trainer_state}, checkpoint_path)
-        restored = MDNAuxiliaryModel(context_dim=14, num_skills=8, num_motives=2)
+        restored = MotiveDecompositionNetwork(input_dim=14, num_skills=8, num_objectives=2)
         restored.load_state_dict(torch.load(checkpoint_path, map_location="cpu")["model_state_dict"])
         with torch.no_grad():
-            original = trainer.model(torch.tensor((0.1,) * 14, dtype=torch.float32), torch.tensor(1))
-            loaded = restored(torch.tensor((0.1,) * 14, dtype=torch.float32), torch.tensor(1))
+            original = trainer.model.forward_auxiliary(torch.tensor((0.1,) * 14, dtype=torch.float32), torch.tensor(1))
+            loaded = restored.forward_auxiliary(torch.tensor((0.1,) * 14, dtype=torch.float32), torch.tensor(1))
         return bool(torch.allclose(original[0], loaded[0]) and torch.allclose(original[1], loaded[1]))
 
 

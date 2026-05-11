@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from generator.mdn_auxiliary import MDNAuxiliaryModel
+from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_auxiliary_trainer import (
     MDNAuxiliaryTrainer,
     MDNAuxiliaryTrainerConfig,
@@ -41,7 +41,7 @@ def _synthetic_records() -> list:
 
 
 def test_auxiliary_trainer_runs_and_saves_checkpoint(tmp_path: Path):
-    model = MDNAuxiliaryModel(context_dim=14, num_skills=16, num_motives=2)
+    model = MotiveDecompositionNetwork(input_dim=14, num_skills=16, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(
         model,
         config=MDNAuxiliaryTrainerConfig(
@@ -63,7 +63,7 @@ def test_auxiliary_trainer_runs_and_saves_checkpoint(tmp_path: Path):
 
 def test_auxiliary_trainer_improves_gate_accuracy_and_q_error():
     torch.manual_seed(0)
-    model = MDNAuxiliaryModel(context_dim=14, num_skills=16, num_motives=2)
+    model = MotiveDecompositionNetwork(input_dim=14, num_skills=16, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(
         model,
         config=MDNAuxiliaryTrainerConfig(
@@ -132,7 +132,7 @@ def test_build_auxiliary_record_preserves_behavior_probability_when_present():
 
 
 def test_auxiliary_trainer_raises_when_ips_mode_enabled_without_probability_aware_dataset():
-    model = MDNAuxiliaryModel(context_dim=14, num_skills=16, num_motives=2)
+    model = MotiveDecompositionNetwork(input_dim=14, num_skills=16, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(
         model,
         config=MDNAuxiliaryTrainerConfig(use_ips=True, batch_size=8, max_epochs=1),
