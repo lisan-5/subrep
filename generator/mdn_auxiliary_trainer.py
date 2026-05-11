@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from baseline.improvement_calculator import ImprovementCalculator
 from certification.cds_test import CDSGate
 from certification.pds_test import PDSGate
-from generator.mdn_auxiliary import MDNAuxiliaryModel
+from generator.mdn import MotiveDecompositionNetwork
 from utils.return_targets import discounted_motive_return, doubly_robust_return, ips_weighted_return
 
 
@@ -105,7 +105,7 @@ class MDNAuxiliaryTrainerConfig:
 class MDNAuxiliaryTrainer:
     """Train the proposal-conditioned auxiliary MDN model with BCE + MSE."""
 
-    def __init__(self, model: MDNAuxiliaryModel, config: Optional[MDNAuxiliaryTrainerConfig] = None, device: Optional[str] = None) -> None:
+    def __init__(self, model: MotiveDecompositionNetwork, config: Optional[MDNAuxiliaryTrainerConfig] = None, device: Optional[str] = None) -> None:
         self.model = model
         self.config = config or MDNAuxiliaryTrainerConfig()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -157,7 +157,7 @@ class MDNAuxiliaryTrainer:
             if training:
                 self.optimizer.zero_grad(set_to_none=True)
 
-            gate_logits, q_hat = self.model(context, skill_id)
+            gate_logits, q_hat = self.model.forward_auxiliary(context, skill_id)
             if self.config.use_ips:
                 raise ValueError(
                     "IPS-weighted auxiliary training requires a dedicated probability-aware dataset path; the current batch loader does not provide behavior_probability yet"
@@ -203,7 +203,7 @@ class MDNAuxiliaryTrainer:
             if training:
                 self.optimizer.zero_grad(set_to_none=True)
 
-            gate_logits, q_hat = self.model(context, skill_id)
+            gate_logits, q_hat = self.model.forward_auxiliary(context, skill_id)
             model_target_probability = self._compute_target_probability(gate_logits, accept_label)
             model_target_probability = model_target_probability.unsqueeze(1).expand_as(behavior_probability)
             importance_weights = model_target_probability / behavior_probability
@@ -426,6 +426,6 @@ def build_auxiliary_record(
     )
 
 
-def create_auxiliary_trainer_for_model(model: MDNAuxiliaryModel, seed: int = 0, device: Optional[str] = None) -> MDNAuxiliaryTrainer:
+def create_auxiliary_trainer_for_model(model: MotiveDecompositionNetwork, seed: int = 0, device: Optional[str] = None) -> MDNAuxiliaryTrainer:
     _seed_everything(seed)
     return MDNAuxiliaryTrainer(model=model, config=MDNAuxiliaryTrainerConfig(random_seed=seed), device=device)
