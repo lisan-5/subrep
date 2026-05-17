@@ -16,6 +16,7 @@ from utils.mdn_record_builder import (
 )
 from utils.mdn_reward import compute_advantage, compute_mdn_utility
 from utils.mdn_selection import alpha_to_mean_weights, select_best_candidate
+from utils.weight_set_store import WeightSetStore
 
 from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_auxiliary_trainer import AuxiliaryTrainingRecord, build_auxiliary_record
@@ -54,6 +55,7 @@ def build_records_from_prepared_candidate_outcomes(
     seed: int = 0,
     device: Optional[str] = None,
     payoff_weight: float = 0.0,
+    weight_store: Optional[WeightSetStore] = None,
 ) -> list[MDNDecisionRecord]:
     """Build offline MDN decision records from prepared candidate outcome payloads."""
     grouped = group_candidate_outcomes_by_context(prepared_outcomes)
@@ -70,6 +72,7 @@ def build_records_from_prepared_candidate_outcomes(
         candidate_skills = build_candidate_skill_records(
             skill_outcomes=group,
             baseline_stats=baseline_stats,
+            weight_store=weight_store,
         )
         alpha, support_values = trainer.model(
             __import__("torch").tensor(context, dtype=__import__("torch").float32, device=trainer.device)
@@ -113,6 +116,7 @@ def build_auxiliary_records_from_prepared_candidate_outcomes(
     prepared_outcomes: Iterable[dict[str, Any] | PreparedCandidateOutcome],
     baseline_stats: dict[str, Any],
     gamma: float = 1.0,
+    weight_store: Optional[WeightSetStore] = None,
 ) -> list[AuxiliaryTrainingRecord]:
     """Build auxiliary records from all proposals, including uncertified ones.
 
@@ -124,6 +128,10 @@ def build_auxiliary_records_from_prepared_candidate_outcomes(
     records: list[AuxiliaryTrainingRecord] = []
     for _, group in grouped.items():
         for outcome in group:
+            weight_set = None
+            if weight_store is not None:
+                context_array = np.asarray(outcome.context, dtype=np.float32)
+                weight_set = weight_store.get_weight_set(context_array)
             records.append(
                 build_auxiliary_record(
                     context=outcome.context,
@@ -135,6 +143,7 @@ def build_auxiliary_records_from_prepared_candidate_outcomes(
                     epsilon=outcome.epsilon,
                     motive_trajectory=np.asarray([outcome.motives], dtype=np.float32),
                     gamma=gamma,
+                    weight_set=weight_set,
                 )
             )
     return records
@@ -148,6 +157,7 @@ def train_mdn_from_prepared_outcomes(
     seed: int = 0,
     device: Optional[str] = None,
     payoff_weight: float = 0.0,
+    weight_store: Optional[WeightSetStore] = None,
 ) -> dict[str, float | str]:
     """Build decision records from prepared outcomes, then train MDN offline."""
     records = build_records_from_prepared_candidate_outcomes(
@@ -157,6 +167,7 @@ def train_mdn_from_prepared_outcomes(
         seed=seed,
         device=device,
         payoff_weight=payoff_weight,
+        weight_store=weight_store,
     )
     return train_mdn_from_records(records, checkpoint_path=checkpoint_path, seed=seed, device=device)
 

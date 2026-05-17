@@ -71,6 +71,11 @@ class WeightSetStore:
         weight_set = self._store.get(key, WeightSet())
         return weight_set.get_support_values(self._query_directions)
 
+    def get_weight_set(self, context: np.ndarray) -> Optional[WeightSet]:
+        """Get the WeightSet for a context, or None if not yet observed."""
+        key = self._context_key(context)
+        return self._store.get(key)
+
     def get_all_support_targets(self) -> list[tuple[np.ndarray, np.ndarray]]:
         targets: list[tuple[np.ndarray, np.ndarray]] = []
         for key, weight_set in self._store.items():

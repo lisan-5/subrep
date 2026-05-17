@@ -18,6 +18,7 @@ from certification.cds_test import CDSGate
 from certification.pds_test import PDSGate
 from generator.mdn import MotiveDecompositionNetwork
 from utils.return_targets import discounted_motive_return, doubly_robust_return, ips_weighted_return
+from utils.weight_set_store import WeightSet
 
 
 def _seed_everything(seed: int) -> None:
@@ -364,6 +365,7 @@ def build_auxiliary_record(
     use_ips: bool = False,
     use_doubly_robust: bool = False,
     gamma: float = 1.0,
+    weight_set: Optional[WeightSet] = None,
 ) -> AuxiliaryTrainingRecord:
     context = tuple(float(v) for v in np.asarray(context, dtype=np.float32).reshape(-1))
 
@@ -374,9 +376,9 @@ def build_auxiliary_record(
         delta_r, delta_n = calculator.compute_improvements(skill_payoff=payoff, skill_motives=motives)
         gate_type_normalized = gate_type.strip().upper()
         if gate_type_normalized == "CDS":
-            accept_label = CDSGate().admit(delta_r, delta_n)
+            accept_label = CDSGate().admit(delta_r, delta_n, weight_set=weight_set)
         elif gate_type_normalized == "PDS":
-            accept_label = PDSGate(epsilon=0.1 if epsilon is None else float(epsilon)).admit(delta_r, delta_n)
+            accept_label = PDSGate(epsilon=0.1 if epsilon is None else float(epsilon)).admit(delta_r, delta_n, weight_set=weight_set)
         else:
             raise ValueError(f"gate_type must be 'CDS' or 'PDS', got {gate_type!r}")
 
