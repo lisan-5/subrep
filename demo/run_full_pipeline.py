@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import torch
 from datetime import datetime, timezone
 
 import numpy as np
@@ -24,6 +25,7 @@ from certification.certificate_schema import Certificate
 from certification.metta_storage import CertificateStore
 from library.skill_library import SkillLibrary
 from library.skill_selector import SkillSelector
+from generator.skill_generator import SkillGenerator
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 NUM_EPISODES        = 10
@@ -87,6 +89,13 @@ def run_pipeline() -> dict:
     gate = CDSGate()
     pds_gate = PDSGate(epsilon=0.1)  # Allow a small mathematical trade-off budget
 
+    # ── 1.5 Load Skill Generator (Pre-Filter) ─────────────────────────────────
+    print("[Init] Loading trained SkillGenerator from models/generator.pt...")
+    model = SkillGenerator(input_dim=8, hidden_dim=64, motive_dim=2)
+    model.load("models/generator.pt")
+    model.eval()  # Set to inference mode
+
+
     # ── 2. Stores ──────────────────────────────────────────────────────────────
     print("[Init] Initializing CertificateStore (MeTTa) and SkillLibrary...")
     cert_store = CertificateStore()
@@ -96,10 +105,10 @@ def run_pipeline() -> dict:
     # ── 3. Episode Loop ────────────────────────────────────────────────────────
     print(f"\n[Loop] Running {NUM_EPISODES} episodes...\n")
     print(
-        f"{'Ep':>4}  {'Payoff':>9}  {'Δr':>8}  {'min(Δn)':>8}  "
+        f"{'Ep':>4}  {'Search':>6}  {'Payoff':>9}  {'Δr':>8}  {'min(Δn)':>8}  "
         f"{'CDS':>3}  {'PDS':>3}  {'Result':>10}  {'Lib':>4}"
     )
-    print("-" * 60)
+    print("-" * 70)
 
     admitted = 0
     rejected = 0
@@ -108,18 +117,28 @@ def run_pipeline() -> dict:
     for ep in range(1, NUM_EPISODES + 1):
         skill_id = f"skill_{ep:03d}"
 
-        # SELECT — pick a skill or fall back to random policy
-        # SubRepEnv uses its internal seed and takes no argument
-        obs, _ = env.reset()
-        selected = selector.select_random(obs)
-        if selected is not None:
-            skill_entry = library.get_skill(selected)
-            policy_fn = skill_entry.policy if skill_entry and skill_entry.policy else \
-                lambda o: env.env.action_space.sample()
-        else:
-            policy_fn = lambda o: env.env.action_space.sample()
+        # SELECT — pick a skill or search for a good starting state
+        searches = 0
+        max_search = 500
+        found_promising_state = False
+        obs = None
+
+        while not found_promising_state and searches < max_search:
+            searches += 1
+            obs, _ = env.reset()
+            # Predict outcome using the SkillGenerator
+            with torch.no_grad():
+                pred_payoff, pred_motives = model(torch.tensor(obs, dtype=torch.float32))
+                pred_dr, pred_dn = calculator.compute_improvements(
+                    pred_payoff.item(), pred_motives.numpy()
+                )
+                # Does the model THINK it will pass either gate?
+                if gate.admit(pred_dr, pred_dn) or pds_gate.admit(pred_dr, pred_dn):
+                    found_promising_state = True
 
         # EXECUTE — run one episode
+        # TODO: Replace this random pilot with a Trained RL Policy
+        policy_fn = lambda o: env.env.action_space.sample()
         executor = SkillExecutor(
             env=env,
             policy_fn=policy_fn,
@@ -162,7 +181,7 @@ def run_pipeline() -> dict:
             result_str = "REJECTED ❌"
 
         print(
-            f"{ep:>4}  {payoff:>9.3f}  {delta_r:>8.3f}  {float(np.min(delta_n)):>8.3f}"
+            f"{ep:>4}  {searches:>6d}  {payoff:>9.3f}  {delta_r:>8.3f}  {float(np.min(delta_n)):>8.3f}"
             f"  {'Y' if admitted_cds else 'N':>3}  {'Y' if admitted_pds else 'N':>3}"
             f"  {result_str:>12}  {library.count():>4}"
         )
