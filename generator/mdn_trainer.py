@@ -32,6 +32,8 @@ class MDNTrainerConfig:
     payoff_weight: float = 0.0
     checkpoint_path: str = "models/mdn_policy_best.pth"
     strict_validation: bool = False
+    entropy_beta: float = 0.01
+    gradient_clip_norm: float = 1.0
 
 
 class MDNTrainer:
@@ -48,6 +50,11 @@ class MDNTrainer:
             weight_decay=self.config.weight_decay,
         )
         self.running_baseline: float | None = None
+        self._context_baselines: dict[tuple[float, ...], float] = {}
+
+    @staticmethod
+    def _get_context_key(context: tuple[float, ...]) -> tuple[float, ...]:
+        return tuple(round(value, 3) for value in context)
 
     def training_step(self, record: MDNDecisionRecord) -> dict[str, float]:
         """Run one offline policy-learning step from a validated decision record."""
@@ -63,6 +70,7 @@ class MDNTrainer:
         distribution = torch.distributions.Dirichlet(alpha)
         recorded_weights = torch.tensor(record.weights_used, dtype=torch.float32, device=self.device)
         log_prob = distribution.log_prob(recorded_weights)
+        entropy = distribution.entropy()
 
         weights_np = recorded_weights.detach().cpu().numpy()
         selected_skill_id, selected_score = select_best_candidate(record.candidate_skills, weights_np)
@@ -77,25 +85,42 @@ class MDNTrainer:
             actual_payoff=record.actual_payoff,
             payoff_weight=self.config.payoff_weight,
         ) if record.utility is None else float(record.utility)
+        context_key = self._get_context_key(record.context)
+        context_baseline = self._context_baselines.get(context_key, self.running_baseline)
         advantage = compute_advantage(
             utility=utility,
             baseline_utility=None,
-            running_baseline=self.running_baseline,
+            running_baseline=context_baseline,
         )
-        loss = compute_mdn_policy_loss(log_prob, advantage)
+        policy_loss = compute_mdn_policy_loss(log_prob, advantage)
+        loss = policy_loss - self.config.entropy_beta * entropy
         loss.backward()
-        clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        clip_grad_norm_(self.model.parameters(), max_norm=self.config.gradient_clip_norm)
         self.optimizer.step()
 
-        self.running_baseline = utility if self.running_baseline is None else 0.9 * self.running_baseline + 0.1 * utility
+        baseline_momentum = 0.9
+        if context_key in self._context_baselines:
+            self._context_baselines[context_key] = (
+                baseline_momentum * self._context_baselines[context_key]
+                + (1.0 - baseline_momentum) * utility
+            )
+        else:
+            self._context_baselines[context_key] = utility
+        self.running_baseline = (
+            utility
+            if self.running_baseline is None
+            else baseline_momentum * self.running_baseline + (1.0 - baseline_momentum) * utility
+        )
 
         return {
             "loss": float(loss.item()),
             "utility": float(utility),
             "advantage": float(advantage),
+            "entropy": float(entropy.item()),
             "selected_score": float(selected_score),
             "log_prob": float(log_prob.item()),
             "alpha_mean": float(alpha.detach().mean().item()),
+            "alpha_max": float(alpha.detach().max().item()),
             "support_mean": float(support_values.detach().mean().item()),
         }
 
@@ -119,6 +144,7 @@ class MDNTrainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "config": self.config.__dict__,
                 "running_baseline": self.running_baseline,
+                "context_baselines": self._context_baselines,
             },
             checkpoint_path,
         )
@@ -141,6 +167,7 @@ class MDNTrainer:
         trainer.model.load_state_dict(checkpoint["model_state_dict"])
         trainer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         trainer.running_baseline = checkpoint.get("running_baseline")
+        trainer._context_baselines = checkpoint.get("context_baselines", {})
         return trainer
 
 
