@@ -100,8 +100,8 @@ class MDNDecisionRecord:
             raise ValueError("weights_used length must match alpha length")
         if any(value <= 0.0 for value in alpha):
             raise ValueError(f"alpha must be strictly positive, got {alpha}")
-        if any(value < 0.0 or value > 1.0 for value in support_values):
-            raise ValueError(f"support_values must lie in [0, 1], got {support_values}")
+        if any(value < 0.0 for value in support_values):
+            raise ValueError(f"support_values must be non-negative, got {support_values}")
 
         weights_array = np.asarray(weights_used, dtype=float)
         if not validate_simplex_weights(weights_array):
