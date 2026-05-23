@@ -12,8 +12,8 @@ from utils.weight_set_store import WeightSetStore
 
 def _store_with_targets() -> WeightSetStore:
     store = WeightSetStore(num_objectives=2)
-    store.observe_certified_weight(np.array([0.1] * 14, dtype=np.float32), np.array([0.8, 0.2], dtype=np.float32))
-    store.observe_certified_weight(np.array([0.2] * 14, dtype=np.float32), np.array([0.3, 0.7], dtype=np.float32))
+    store.observe_certified_weight(np.array([0.1] * 8, dtype=np.float32), np.array([0.8, 0.2], dtype=np.float32))
+    store.observe_certified_weight(np.array([0.2] * 8, dtype=np.float32), np.array([0.3, 0.7], dtype=np.float32))
     return store
 
 
@@ -89,7 +89,7 @@ def test_support_trainer_checkpoint_round_trip(tmp_path: Path):
     restored_trainer = MDNSupportTrainer.from_checkpoint(checkpoint_path, restored_model, store, device="cpu")
 
     with torch.no_grad():
-        original_output = trainer.model.forward_inference(torch.tensor((0.1,) * 14, dtype=torch.float32))[1]
-        restored_output = restored_trainer.model.forward_inference(torch.tensor((0.1,) * 14, dtype=torch.float32))[1]
+        original_output = trainer.model.forward_inference(torch.tensor((0.1,) * 8, dtype=torch.float32))[1]
+        restored_output = restored_trainer.model.forward_inference(torch.tensor((0.1,) * 8, dtype=torch.float32))[1]
 
     assert torch.allclose(original_output, restored_output)

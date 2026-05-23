@@ -21,7 +21,7 @@ def test_observe_and_train_support_adds_vertex_to_store():
     result = observe_and_train_support(
         store=store,
         trainer=trainer,
-        context=np.array([0.1] * 14, dtype=np.float32),
+        context=np.array([0.1] * 8, dtype=np.float32),
         weight_vector=np.array([0.8, 0.2], dtype=np.float32),
     )
 
@@ -43,7 +43,7 @@ def test_observe_and_train_support_returns_finite_loss_when_training_runs():
     loss = observe_and_train_support(
         store=store,
         trainer=trainer,
-        context=np.array([0.1] * 14, dtype=np.float32),
+        context=np.array([0.1] * 8, dtype=np.float32),
         weight_vector=np.array([0.8, 0.2], dtype=np.float32),
     )
 
@@ -64,13 +64,13 @@ def test_observe_and_train_support_accumulates_multiple_contexts():
     observe_and_train_support(
         store=store,
         trainer=trainer,
-        context=np.array([0.1] * 14, dtype=np.float32),
+        context=np.array([0.1] * 8, dtype=np.float32),
         weight_vector=np.array([0.8, 0.2], dtype=np.float32),
     )
     observe_and_train_support(
         store=store,
         trainer=trainer,
-        context=np.array([0.2] * 14, dtype=np.float32),
+        context=np.array([0.2] * 8, dtype=np.float32),
         weight_vector=np.array([0.3, 0.7], dtype=np.float32),
     )
 

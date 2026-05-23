@@ -35,6 +35,7 @@ def ips_weighted_return(
     behavior_probability: Optional[np.ndarray] = None,
     target_probability: Optional[np.ndarray] = None,
     gamma: float = 1.0,
+    clip_value: float | None = 10.0,
 ) -> np.ndarray:
     """Compute an IPS-weighted discounted motive return.
 
@@ -67,6 +68,11 @@ def ips_weighted_return(
 
     discounts = np.power(gamma, np.arange(motives.shape[1], dtype=np.float32))
     importance_weights = target_probability / behavior_probability
+    if clip_value is not None:
+        clip_value = float(clip_value)
+        if clip_value <= 0.0 or not np.isfinite(clip_value):
+            raise ValueError(f"clip_value must be positive and finite when provided, got {clip_value}")
+        importance_weights = np.minimum(importance_weights, clip_value)
     return np.sum(motives * importance_weights[:, :, None] * discounts[None, :, None], axis=1).astype(np.float32)
 
 

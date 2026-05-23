@@ -85,8 +85,11 @@ class MDNDecisionRecord:
     actual_payoff: float | None = None
     actual_motives: tuple[float, float] | None = None
     utility: float | None = None
+    schema_version: str = field(default="1.0", kw_only=True)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.schema_version, str) or not self.schema_version.strip():
+            raise ValueError("schema_version must be a non-empty string")
         context = _as_finite_vector(self.context, field_name="context")
         alpha = _as_finite_vector(self.alpha, field_name="alpha")
         support_values = _as_finite_vector(self.support_values, field_name="support_values")

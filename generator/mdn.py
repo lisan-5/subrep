@@ -11,7 +11,7 @@ class MotiveDecompositionNetwork(nn.Module):
     """
     def __init__(
         self,
-        input_dim: int = 14,
+        input_dim: int = 8,
         num_objectives: int = 2,
         hidden_dim: int = 64,
         num_hidden_layers: int = 2,

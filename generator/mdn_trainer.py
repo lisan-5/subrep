@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Protocol
 
 import numpy as np
 import torch
@@ -38,10 +38,20 @@ class MDNTrainerConfig:
     batch_size: int = 16
 
 
+class TrainingCallback(Protocol):
+    def on_step(self, step: int, metrics: dict[str, float]) -> None: ...
+
+
 class MDNTrainer:
     """Train MDN alpha outputs through downstream selection utility."""
 
-    def __init__(self, model: MotiveDecompositionNetwork, config: Optional[MDNTrainerConfig] = None, device: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        model: MotiveDecompositionNetwork,
+        config: Optional[MDNTrainerConfig] = None,
+        device: Optional[str] = None,
+        callback: Optional[TrainingCallback] = None,
+    ) -> None:
         self.model = model
         self.config = config or MDNTrainerConfig()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -53,6 +63,8 @@ class MDNTrainer:
         )
         self.running_baseline: float | None = None
         self._context_baselines: dict[tuple[float, ...], float] = {}
+        self.callback = callback
+        self._step_count = 0
 
     @staticmethod
     def _get_context_key(context: tuple[float, ...]) -> tuple[float, ...]:
@@ -117,7 +129,7 @@ class MDNTrainer:
 
         self._update_baselines(context_key, utility)
 
-        return {
+        metrics = {
             "loss": float(loss.item()),
             "utility": float(utility),
             "advantage": float(advantage),
@@ -128,6 +140,10 @@ class MDNTrainer:
             "alpha_max": float(alpha.detach().max().item()),
             "support_mean": float(support_values.detach().mean().item()),
         }
+        self._step_count += 1
+        if self.callback is not None:
+            self.callback.on_step(self._step_count, metrics)
+        return metrics
 
     def train_records(self, records: Iterable[MDNDecisionRecord]) -> dict[str, float]:
         """Run one pass over offline records with mini-batch gradient updates."""
@@ -209,19 +225,21 @@ class MDNTrainer:
                 context_key = self._get_context_key(record.context)
                 self._update_baselines(context_key, utility)
 
-            all_metrics.append(
-                {
-                    "loss": float(batch_loss.item()),
-                    "utility": float(np.mean(batch_utilities)),
-                    "advantage": float(np.mean(batch_advantages)),
-                    "entropy": float(np.mean(batch_entropies)),
-                    "selected_score": float(np.mean(batch_selected_scores)),
-                    "log_prob": float(np.mean(batch_log_probs)),
-                    "alpha_mean": float(np.mean(batch_alpha_means)),
-                    "alpha_max": float(np.mean(batch_alpha_maxes)),
-                    "support_mean": float(np.mean(batch_support_means)),
-                }
-            )
+            metrics = {
+                "loss": float(batch_loss.item()),
+                "utility": float(np.mean(batch_utilities)),
+                "advantage": float(np.mean(batch_advantages)),
+                "entropy": float(np.mean(batch_entropies)),
+                "selected_score": float(np.mean(batch_selected_scores)),
+                "log_prob": float(np.mean(batch_log_probs)),
+                "alpha_mean": float(np.mean(batch_alpha_means)),
+                "alpha_max": float(np.mean(batch_alpha_maxes)),
+                "support_mean": float(np.mean(batch_support_means)),
+            }
+            all_metrics.append(metrics)
+            self._step_count += 1
+            if self.callback is not None:
+                self.callback.on_step(self._step_count, metrics)
 
         return {
             key: float(np.mean([item[key] for item in all_metrics]))
