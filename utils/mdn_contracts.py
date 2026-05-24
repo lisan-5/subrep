@@ -85,7 +85,7 @@ class MDNDecisionRecord:
     actual_payoff: float | None = None
     actual_motives: tuple[float, float] | None = None
     utility: float | None = None
-    schema_version: str = field(default="1.0", kw_only=True)
+    schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
         if not isinstance(self.schema_version, str) or not self.schema_version.strip():
