@@ -19,6 +19,7 @@ from utils.mdn_selection import sample_dirichlet_weights, select_best_candidate
 
 
 def _seed_everything(seed: int) -> None:
+    random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():

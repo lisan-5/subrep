@@ -110,7 +110,7 @@ class RuntimeCertificationPipeline:
             is_certified=is_certified,
             gate_type=self.config.gate_type,
             was_already_certified=False,
-            admission_margin=float(delta_r) + float(np.min(delta_n)) if weight_set is None else float(delta_r) + float(np.min(weight_set.get_vertices_array() @ np.asarray(delta_n, dtype=np.float32))),
+            admission_margin=self._compute_admission_margin(delta_r, delta_n, context, weight_set),
             delta_r=float(delta_r),
             delta_n=tuple(float(v) for v in delta_n),
         )
@@ -254,3 +254,36 @@ class RuntimeCertificationPipeline:
             return cvar_result
 
         return result
+
+    def _compute_admission_margin(
+        self,
+        delta_r: float,
+        delta_n: np.ndarray,
+        context: np.ndarray,
+        weight_set: Optional[WeightSet],
+    ) -> float:
+        gate_type = self.config.gate_type.upper()
+
+        if gate_type == "CDS":
+            return CDSGate().get_admission_margin(delta_r, delta_n, weight_set=weight_set)
+        if gate_type == "PDS":
+            return PDSGate(epsilon=self.config.pds_epsilon).get_admission_margin(
+                delta_r,
+                delta_n,
+                weight_set=weight_set,
+            )
+        if gate_type == "CVAR":
+            with __import__("torch").no_grad():
+                context_tensor = __import__("torch").tensor(
+                    context,
+                    dtype=__import__("torch").float32,
+                    device=self.model.device if hasattr(self.model, "device") else "cpu",
+                )
+                alpha, _ = self.model.forward_inference(context_tensor)
+            alpha_np = alpha.detach().cpu().numpy()
+            return CVaRGate(
+                confidence=self.config.cvar_confidence,
+                n_samples=self.config.cvar_samples,
+            ).get_cvar(delta_r, delta_n, mdn_alpha=alpha_np)
+
+        raise ValueError(f"Unknown gate_type: {gate_type}")
