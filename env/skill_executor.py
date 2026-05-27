@@ -44,6 +44,43 @@ class SkillExecutor:
         self.payoff_fn = payoff_fn or (lambda reward_vec: float(np.sum(reward_vec)))
         self.last_run_info = None         # Holds diagnostics from the most recent run for downstream debugging.
 
+    @classmethod
+    def from_pilot_checkpoint(
+        cls,
+        env,
+        checkpoint_path: str = "models/pilot_ppo.pt",
+        gamma: float = 0.99,
+        max_steps: Optional[int] = None,
+        payoff_fn: Optional[Callable[[np.ndarray], float]] = None,
+        deterministic: bool = True,
+        map_location: str = "cpu",
+    ) -> "SkillExecutor":
+        """Create an executor backed by a saved RLPilot checkpoint."""
+        from pilot.rl_pilot import RLPilot
+
+        pilot = RLPilot.load(checkpoint_path, map_location=map_location)
+
+        def policy_fn(obs):
+            # SkillExecutor already supports arbitrary policy callables. This
+            # adapter keeps that contract intact while replacing random action
+            # sampling with the trained PPO pilot for certification rollouts.
+            return pilot.predict(
+                obs,
+                deterministic=deterministic,
+                return_probability=True,
+            )
+
+        executor = cls(
+            env=env,
+            policy_fn=policy_fn,
+            gamma=gamma,
+            max_steps=max_steps,
+            payoff_fn=payoff_fn,
+        )
+        executor.pilot = pilot
+        executor.pilot_checkpoint_path = checkpoint_path
+        return executor
+
     def run_episode(self):
         """
         Run one rollout from reset and return:
