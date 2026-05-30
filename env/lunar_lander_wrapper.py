@@ -33,7 +33,7 @@ class SubRepEnv:
             f"Expected obs shape (8,), got {base_env.observation_space.shape}"
         
         # MO-LunarLander-v3 returns 4 objectives:
-        # [0] Shaping reward, [1] Landing success, [2] Fuel usage, [3] Crash penalty
+        # [0] Terminal result, [1] dense shaping, [2] main engine cost, [3] side engine cost
         # We map these to SubRep's 2 objectives: [Safety, Fuel]
         assert base_env.reward_space.shape[0] == 4, \
             f"Expected 4 raw objectives from MO-LunarLander, got {base_env.reward_space.shape[0]}"
@@ -76,11 +76,13 @@ class SubRepEnv:
     def reset(self, seed=None):
         """Reset the environment and return initial observation."""
         # Only update the stored seed when the caller explicitly provides one.
-        # This lets evaluation use varied seeds (`seed + episode`) while normal
-        # `reset()` calls keep the previously configured reproducible seed.
+        # Otherwise Gym continues from its current RNG stream, so repeated
+        # `reset()` calls are stochastic instead of replaying one start state.
         if seed is not None:
             self.seed = int(seed)
-        obs, info = self.env.reset(seed=self.seed)
+            obs, info = self.env.reset(seed=self.seed)
+        else:
+            obs, info = self.env.reset()
         return obs, info
 
     def step(self, action):

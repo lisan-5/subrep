@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from baseline.idle_policy import IdlePolicy
 from baseline.improvement_calculator import ImprovementCalculator
@@ -38,6 +39,34 @@ def pilot_eval_metrics(trained_pilot: RLPilot) -> dict[str, object]:
         episodes=EVAL_EPISODES,
         seed=2_000,
     )
+
+
+def test_pilot_checkpoint_metadata_documents_reproducibility():
+    checkpoint = torch.load(CHECKPOINT_PATH, map_location="cpu")
+    metadata = checkpoint.get("metadata", {})
+    required_keys = {
+        "regeneration_command",
+        "ppo_config",
+        "reward_shaping_config",
+        "seed",
+        "dependencies",
+        "expected_evaluation_metrics",
+    }
+
+    assert required_keys.issubset(metadata.keys())
+    assert metadata["regeneration_command"] == (
+        "python -m pilot.train_pilot --seed 7 --output models/pilot_ppo.pt"
+    )
+    assert metadata["seed"] == 7
+    assert metadata.get("metadata_only") is False
+    assert isinstance(metadata["ppo_config"], dict)
+    assert isinstance(metadata["reward_shaping_config"], dict)
+    assert isinstance(metadata["dependencies"], dict)
+
+    expected_metrics = metadata["expected_evaluation_metrics"]
+    assert expected_metrics["success_rate"] > 0.50
+    assert expected_metrics["mean_delta_r_vs_idle"] > 0.0
+    assert expected_metrics["gate_passes"] >= 1
 
 
 def _run_pilot_episodes(
