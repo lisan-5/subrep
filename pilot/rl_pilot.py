@@ -200,7 +200,7 @@ class RLPilot(nn.Module):
             "observation_dim": self.observation_dim,
             "action_dim": self.action_dim,
             "hidden_sizes": self.hidden_sizes,
-            "metadata": metadata or {},
+            "metadata": _metadata_to_python(metadata or {}),
         }
         torch.save(payload, path)
 
@@ -420,6 +420,20 @@ def _seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+def _metadata_to_python(value: Any) -> Any:
+    """Convert checkpoint metadata to safe Python primitives before saving."""
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().tolist()
+    if isinstance(value, dict):
+        return {str(key): _metadata_to_python(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_metadata_to_python(item) for item in value]
+    return value
 
 
 def _reset_env(env: Any, seed: int):
