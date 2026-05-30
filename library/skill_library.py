@@ -27,7 +27,10 @@ class SkillLibrary:
     def add_skill(self, skill_id: str, certificate: Certificate, policy: Callable) -> bool:
         """ Add a certified skill to the library. """
 
-        # 1. Certificate Store Check (Identity & Existence)
+        # 1. Identity & Store Check
+        if skill_id != certificate.skill_id:
+            return False
+            
         if self.cert_store is not None:
             if not self.cert_store.contains(certificate.skill_id):
                 return False
