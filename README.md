@@ -53,11 +53,32 @@ python -m pytest -v
 #Run a specific test file:
 python -m pytest tests/test_certification_gates.py -v
 
-# Run Full Pipeline (Phase 5+)
-python main.py
+# Run Full Pipeline (Phase 3+)
+python -m demo.run_full_pipeline
 ```
 
-### 4. PPO Pilot Reproducibility
+### 4. Running the Demo Pipeline
+
+> [!NOTE]
+> `models/generator.pt` is gitignored. You must train the generator
+> before running the demo.
+
+**Step 1 — Collect environment data:**
+```bash
+python -m data_collector.collect
+```
+
+**Step 2 — Train the Skill Generator:**
+```bash
+python -m generator.train_generator
+```
+
+**Step 3 — Run the end-to-end demo:**
+```bash
+python -m demo.run_full_pipeline
+```
+
+### 5. PPO Pilot Reproducibility
 ```bash
 # Regenerate the committed PPO pilot checkpoint:
 python -m pilot.train_pilot --seed 7 --output models/pilot_ppo.pt
@@ -65,7 +86,6 @@ python -m pilot.train_pilot --seed 7 --output models/pilot_ppo.pt
 # Validate the checkpoint without retraining:
 python -m pytest tests/test_pilot_performance.py -v
 ```
-
 ## Project Structure
 | Folder | Description| 
 | :--- | :---|
