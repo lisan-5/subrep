@@ -246,13 +246,13 @@ def test_full_pipeline_cycle():
         # SubRepEnv.reset() uses its internal seed — no argument accepted.
         obs, _ = env.reset()
         selected = selector.select_random(obs)
-        policy = _random_policy(env)
 
-        # EXECUTE
-        executor = SkillExecutor(
-            env=env, policy_fn=policy, gamma=GAMMA, max_steps=100
+        # EXECUTE — Use trained RL Pilot as requested by team lead
+        executor = SkillExecutor.from_pilot_checkpoint(
+            env=env, gamma=GAMMA, max_steps=100
         )
         payoff, motives, _terminated = executor.run_episode()
+        policy = executor.policy_fn
         episode_length = executor.last_run_info.get("steps", 100)
 
         # CERTIFY
