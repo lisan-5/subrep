@@ -109,10 +109,11 @@ class MDNAuxiliaryTrainer:
         q_hat: torch.Tensor,
         accept_label: torch.Tensor,
         q_target: torch.Tensor,
+        q_loss_weight: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         gate_loss = self.gate_loss_fn(gate_logits, accept_label)
         q_loss = self.q_loss_fn(q_hat, q_target)
-        total_loss = gate_loss + self.config.lambda_q * q_loss
+        total_loss = gate_loss + self.config.lambda_q * float(q_loss_weight) * q_loss
         return total_loss, gate_loss, q_loss
 
     def _compute_softmax_target_probability(
@@ -192,6 +193,12 @@ class MDNAuxiliaryTrainer:
         for record in records:
             if record.behavior_probability is None:
                 raise ValueError("probability-aware records must have behavior_probability")
+            if record.candidate_delta_r is None:
+                raise ValueError("probability-aware records must have candidate_delta_r")
+            if record.candidate_delta_n is None:
+                raise ValueError("probability-aware records must have candidate_delta_n")
+            if record.selected_candidate_index is None:
+                raise ValueError("probability-aware records must have selected_candidate_index")
 
             ctx = torch.tensor(record.context, dtype=torch.float32, device=self.device).unsqueeze(0)
             sid = torch.tensor([record.skill_id], dtype=torch.long, device=self.device)
@@ -203,25 +210,24 @@ class MDNAuxiliaryTrainer:
 
             gate_logits, q_hat = self.model.forward_auxiliary(ctx, sid)
 
-            # Recompute target probability using current MDN weights and stored candidate deltas.
-            if (record.candidate_delta_r is not None
-                    and record.candidate_delta_n is not None
-                    and record.selected_candidate_index is not None):
-                alpha, _ = self.model.forward_inference(ctx)
-                weights = alpha_to_mean_weights(alpha.detach().squeeze(0).cpu().numpy())
-                target_prob = self._compute_softmax_target_probability(
-                    record.selected_candidate_index,
-                    record.candidate_delta_r,
-                    record.candidate_delta_n,
-                    weights,
-                )
-                raw_weight = target_prob / max(float(record.behavior_probability), 1e-8)
-                ips_weight = min(raw_weight, float(self.config.ips_clip))
-            else:
-                ips_weight = 1.0
+            alpha, _ = self.model.forward_inference(ctx)
+            weights = alpha_to_mean_weights(alpha.detach().squeeze(0).cpu().numpy())
+            target_prob = self._compute_softmax_target_probability(
+                record.selected_candidate_index,
+                record.candidate_delta_r,
+                record.candidate_delta_n,
+                weights,
+            )
+            raw_weight = target_prob / max(float(record.behavior_probability), 1e-8)
+            ips_weight = min(raw_weight, float(self.config.ips_clip))
 
-            weighted_q_target = q_tgt * ips_weight
-            batch_loss, gate_loss, q_loss = self._compute_losses(gate_logits, q_hat, label, weighted_q_target)
+            batch_loss, gate_loss, q_loss = self._compute_losses(
+                gate_logits,
+                q_hat,
+                label,
+                q_tgt,
+                q_loss_weight=ips_weight,
+            )
 
             if training:
                 batch_loss.backward()
@@ -307,6 +313,12 @@ class MDNAuxiliaryTrainer:
         for record in records_list:
             if record.behavior_probability is None:
                 raise ValueError("All probability-aware records must include behavior_probability")
+            if record.candidate_delta_r is None:
+                raise ValueError("All probability-aware records must include candidate_delta_r")
+            if record.candidate_delta_n is None:
+                raise ValueError("All probability-aware records must include candidate_delta_n")
+            if record.selected_candidate_index is None:
+                raise ValueError("All probability-aware records must include selected_candidate_index")
 
         rng = np.random.default_rng(self.config.random_seed)
         indices = rng.permutation(len(records_list))
