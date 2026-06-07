@@ -544,13 +544,13 @@ def test_select_by_payoff_raises_not_implemented():
         selector.select_by_payoff(obs)
 
 
-def test_select_by_mdn_raises_not_implemented():
-    """select_by_mdn should raise NotImplementedError (Stage 6 stub)."""
+def test_select_by_mdn_requires_mdn():
+    """select_by_mdn should raise ValueError without an MDN."""
     lib = build_populated_library()
     selector = SkillSelector(library=lib)
     obs = np.zeros(8)
 
-    with pytest.raises(NotImplementedError, match="Stage 6"):
+    with pytest.raises(ValueError, match="MotiveDecompositionNetwork"):
         selector.select_by_mdn(obs)
 
 # Integration: Certification → Library → Selection
