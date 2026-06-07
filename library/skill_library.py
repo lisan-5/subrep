@@ -9,11 +9,48 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
-from .skill_metadata import SkillEntry
+from .skill_metadata import SkillEntry, FULL_SIMPLEX, MDN_WX
 from utils.cone_utils import validate_simplex_weights
 from certification.certificate_schema import Certificate
 from certification.cds_test import CDSGate
 from certification.pds_test import PDSGate
+
+
+def _compute_wx_worst_case(
+    delta_n: np.ndarray,
+    support_directions: np.ndarray,
+    support_values: np.ndarray,
+) -> float:
+
+    neg_delta_n = -np.asarray(delta_n, dtype=np.float64)
+    sd = np.asarray(support_directions, dtype=np.float64)
+    sv = np.asarray(support_values, dtype=np.float64)
+    num_obj = len(sv)
+
+    if num_obj != 2:
+        raise ValueError(
+            f"W_x vertex reconstruction requires M=2, got M={num_obj}. General-dimension support requires a linear program."
+        )
+
+    expected_shape = (num_obj, num_obj)
+    if sd.shape != expected_shape:
+        raise ValueError(
+            f"support_directions must have shape {expected_shape}, got {sd.shape}"
+        )
+
+    basis = np.eye(num_obj, dtype=np.float64)
+    if not np.allclose(sd, basis, atol=1e-6):
+        raise ValueError(
+            "W_x vertex reconstruction requires standard basis support directions (identity matrix), got {sd.tolist()}"
+        )
+
+    vertices = np.array([
+        [sv[0], 1.0 - sv[0]],      # maximize along direction e₁
+        [1.0 - sv[1], sv[1]],       # maximize along direction e₂
+    ], dtype=np.float64)
+
+    scores = vertices @ neg_delta_n
+    return float(np.max(scores))
 
 
 class SkillLibrary:
@@ -105,6 +142,45 @@ class SkillLibrary:
                 score = entry.delta_r + float(np.dot(w, delta_n))
                 if score >= -entry.epsilon:
                     admissible.append(entry)
+
+        return admissible
+
+    def query_admissible(
+        self,
+        current_weight: np.ndarray,
+        support_directions: Optional[np.ndarray] = None,
+        support_values: Optional[np.ndarray] = None,
+    ) -> List[SkillEntry]:
+        """Return skills admissible under the current MDN weight and W_x region."""
+        w = np.asarray(current_weight, dtype=np.float64).reshape(-1)
+        if not validate_simplex_weights(w):
+            raise ValueError(
+                f"current_weight must be a valid simplex vector, got {current_weight}"
+            )
+
+        admissible: list[SkillEntry] = []
+        for entry in self._skills.values():
+            if entry.weight_region_type == FULL_SIMPLEX:
+                # Globally certified
+                admissible.append(entry)
+
+            elif entry.weight_region_type == MDN_WX:
+                if support_directions is None or support_values is None:
+                    raise ValueError(
+                        f"MDN_WX skill '{entry.skill_id}' requires current support_directions and support_values for runtime admissibility, but they were not provided."
+                    )
+                sd = np.asarray(support_directions, dtype=np.float64)
+                sv = np.asarray(support_values, dtype=np.float64)
+                delta_n = np.asarray(entry.delta_n, dtype=np.float64)
+
+                h_wx = _compute_wx_worst_case(delta_n, sd, sv)
+
+                if entry.gate_type == "CDS":
+                    if entry.delta_r >= h_wx:
+                        admissible.append(entry)
+                elif entry.gate_type == "PDS":
+                    if entry.delta_r >= h_wx - entry.epsilon:
+                        admissible.append(entry)
 
         return admissible
 
