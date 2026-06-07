@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -45,6 +46,8 @@ class MDNOnlineRunner:
         save_every_n_steps: int = 10,
         auxiliary_trainer: Optional[MDNAuxiliaryTrainer] = None,
         device: Optional[str] = None,
+        certificate_store: Optional[Any] = None,
+        certificate_metadata: Optional[dict[str, Any]] = None,
     ) -> None:
         if save_every_n_steps <= 0:
             raise ValueError("save_every_n_steps must be positive")
@@ -58,6 +61,8 @@ class MDNOnlineRunner:
         self.store_path = store_path or certification_pipeline.config.store_path
         self.save_every_n_steps = int(save_every_n_steps)
         self.selector = MDNRuntimeSelector(model=model, device=device or str(policy_trainer.device))
+        self.certificate_store = certificate_store
+        self.certificate_metadata: dict[str, Any] = dict(certificate_metadata) if certificate_metadata else {}
         self._step_count = 0
 
     def step(
@@ -88,6 +93,8 @@ class MDNOnlineRunner:
         certified_skill_ids = tuple(
             candidate.skill_id for candidate in certified_candidates if candidate.is_certified
         )
+        if self.certificate_store is not None:
+            self._write_certified_to_store(certified_candidates)
         if not certified_skill_ids:
             self._step_count += 1
             self._maybe_save()
@@ -131,6 +138,44 @@ class MDNOnlineRunner:
             certified_skill_ids=certified_skill_ids,
         )
 
+    def _write_certified_to_store(self, candidates: list[CandidateSkillRecord]) -> None:
+        """Write newly certified candidates to the MeTTa CertificateStore.
+
+        The store deduplicates by skill_id so calling this on every step is safe.
+        Candidates with missing or negative admission_margin are skipped — this
+        guards against malformed records reaching the certificate schema validator.
+        Certificate and hyperon imports are deferred so the runner can be used
+        without hyperon installed when no certificate_store is provided.
+        """
+        from certification.certificate_schema import Certificate  # deferred — requires no hyperon
+
+        timestamp = datetime.now().isoformat()
+        meta = self.certificate_metadata
+        for candidate in candidates:
+            if not candidate.is_certified:
+                continue
+            if candidate.admission_margin is None or candidate.admission_margin < 0.0:
+                continue
+            try:
+                cert = Certificate(
+                    skill_id=candidate.skill_id,
+                    gate_type=candidate.gate_type,
+                    delta_r=candidate.delta_r,
+                    delta_n=candidate.delta_n,
+                    admission_margin=candidate.admission_margin,
+                    epsilon=candidate.epsilon if candidate.epsilon is not None else 0.0,
+                    timestamp=timestamp,
+                    seed=int(meta.get("seed", 0)),
+                    gamma=float(meta.get("gamma", 1.0)),
+                    baseline_id=candidate.baseline_id or "default",
+                    environment=str(meta.get("environment", "mo-lunar-lander-v3")),
+                    episode_length=int(meta.get("episode_length", 1)),
+                    version=str(meta.get("version", "1.0")),
+                )
+                self.certificate_store.add(cert)
+            except (ValueError, TypeError):
+                pass
+
     def save(self) -> None:
         """Persist policy checkpoint and weight store."""
         self.policy_trainer.save_checkpoint(self.checkpoint_path)
@@ -154,6 +199,8 @@ class MDNOnlineRunner:
         save_every_n_steps: int = 10,
         auxiliary_trainer: Optional[MDNAuxiliaryTrainer] = None,
         device: Optional[str] = None,
+        certificate_store: Optional[Any] = None,
+        certificate_metadata: Optional[dict[str, Any]] = None,
     ) -> "MDNOnlineRunner":
         """Load persisted runtime state into a new online runner."""
         runner = cls(
@@ -166,6 +213,8 @@ class MDNOnlineRunner:
             save_every_n_steps=save_every_n_steps,
             auxiliary_trainer=auxiliary_trainer,
             device=device,
+            certificate_store=certificate_store,
+            certificate_metadata=certificate_metadata,
         )
         checkpoint_file = Path(checkpoint_path)
         if checkpoint_file.exists():
