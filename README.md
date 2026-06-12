@@ -53,15 +53,45 @@ python -m pytest -v
 #Run a specific test file:
 python -m pytest tests/test_certification_gates.py -v
 
-# Run Full Pipeline (Phase 5+)
-python main.py
+# Run Full Pipeline (Phase 3+)
+python -m demo.run_full_pipeline
 ```
 
+### 4. Running the Demo Pipeline
+
+> [!NOTE]
+> `models/generator.pt` is gitignored. You must train the generator
+> before running the demo.
+
+**Step 1 — Collect environment data:**
+```bash
+python -m data_collector.collect
+```
+
+**Step 2 — Train the Skill Generator:**
+```bash
+python -m generator.train_generator
+```
+
+**Step 3 — Run the end-to-end demo:**
+```bash
+python -m demo.run_full_pipeline
+```
+
+### 5. PPO Pilot Reproducibility
+```bash
+# Regenerate the committed PPO pilot checkpoint:
+python -m pilot.train_pilot --seed 7 --output models/pilot_ppo.pt
+
+# Validate the checkpoint without retraining:
+python -m pytest tests/test_pilot_performance.py -v
+```
 ## Project Structure
 | Folder | Description| 
 | :--- | :---|
 | `env/` | MO-LunarLander wrapper & vector reward handling| 
 | `generator/` | 2-head MLP skill generator (PyTorch)| 
+| `pilot/` | PPO pilot policy, training entry point, and checkpoint utilities|
 | `certification/` | CDS/PDS admission gate logic|
 | `metta/` | PyMeTTa bridge & certificate schema| 
 | `utils/` | TD error computation, logging, helpers| 
