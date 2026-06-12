@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from generator.mdn import MotiveDecompositionNetwork
+from generator.mdn_auxiliary_trainer import MDNAuxiliaryTrainer, MDNAuxiliaryTrainerConfig
 from generator.mdn_online_runner import MDNOnlineRunner, StepResult
 from generator.mdn_trainer import MDNTrainer
 from utils.mdn_runtime_pipeline import RuntimeCertificationPipeline, RuntimePipelineConfig
@@ -168,3 +169,58 @@ def test_full_loop_runs_for_five_steps(tmp_path):
             execute_skill=_execute_skill,
         )
         assert isinstance(result, StepResult)
+
+
+def _make_runner_with_auxiliary(tmp_path) -> MDNOnlineRunner:
+    model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
+    store = WeightSetStore(num_objectives=2)
+    pipeline = RuntimeCertificationPipeline(
+        model=model,
+        weight_store=store,
+        config=RuntimePipelineConfig(
+            gate_type="CDS",
+            train_support_after_certify=False,
+            store_path=str(tmp_path / "weight_store.json"),
+        ),
+    )
+    trainer = MDNTrainer(model=model, device="cpu")
+    aux_trainer = MDNAuxiliaryTrainer(
+        model=model,
+        config=MDNAuxiliaryTrainerConfig(use_ips=True),
+        device="cpu",
+    )
+    return MDNOnlineRunner(
+        model=model,
+        certification_pipeline=pipeline,
+        policy_trainer=trainer,
+        auxiliary_trainer=aux_trainer,
+        baseline_stats=_baseline_stats(),
+        checkpoint_path=str(tmp_path / "mdn_policy_best.pth"),
+        store_path=str(tmp_path / "weight_store.json"),
+        save_every_n_steps=10,
+        device="cpu",
+    )
+
+
+def test_auxiliary_metrics_returned_when_trainer_wired(tmp_path):
+    runner = _make_runner_with_auxiliary(tmp_path)
+    result = runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+    assert result.auxiliary_metrics is not None
+    assert "loss" in result.auxiliary_metrics
+    assert "gate_loss" in result.auxiliary_metrics
+    assert "gate_accuracy" in result.auxiliary_metrics
+    assert np.isfinite(result.auxiliary_metrics["loss"])
+
+
+def test_auxiliary_metrics_none_without_trainer(tmp_path):
+    runner = _make_runner(tmp_path)
+    result = runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+    assert result.auxiliary_metrics is None

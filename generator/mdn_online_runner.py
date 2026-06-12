@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from generator.mdn import MotiveDecompositionNetwork
-from generator.mdn_auxiliary_trainer import MDNAuxiliaryTrainer
+from generator.mdn_auxiliary_trainer import AuxiliaryTrainingRecord, MDNAuxiliaryTrainer
 from generator.mdn_runtime_selector import MDNRuntimeSelector
 from generator.mdn_trainer import MDNTrainer
 from utils.mdn_contracts import CandidateSkillRecord, MDNDecisionRecord
@@ -29,6 +30,7 @@ class StepResult:
     decision_record: MDNDecisionRecord | None
     policy_metrics: dict[str, float] | None
     certified_skill_ids: tuple[str, ...]
+    auxiliary_metrics: dict[str, float] | None = None
 
 
 class MDNOnlineRunner:
@@ -120,6 +122,17 @@ class MDNOnlineRunner:
         )
         policy_metrics = self.policy_trainer.training_step(record)
 
+        auxiliary_metrics: dict[str, float] | None = None
+        if self.auxiliary_trainer is not None:
+            aux_record = self._build_aux_record(
+                context=context,
+                certified_candidates=certified_candidates,
+                selected_skill_id=selection.selected_skill_id,
+                behavior_probability=selection.behavior_probability,
+                actual_motives=tuple(float(v) for v in outcome["actual_motives"]),
+            )
+            auxiliary_metrics = self.auxiliary_trainer.online_step(aux_record)
+
         self.certification_pipeline.certify_candidate_skills(
             context=context,
             candidate_skills=certified_candidates,
@@ -136,6 +149,7 @@ class MDNOnlineRunner:
             decision_record=record,
             policy_metrics=policy_metrics,
             certified_skill_ids=certified_skill_ids,
+            auxiliary_metrics=auxiliary_metrics,
         )
 
     def _write_certified_to_store(self, candidates: list[CandidateSkillRecord]) -> None:
@@ -175,6 +189,33 @@ class MDNOnlineRunner:
                 self.certificate_store.add(cert)
             except (ValueError, TypeError):
                 pass
+
+    def _build_aux_record(
+        self,
+        *,
+        context: np.ndarray,
+        certified_candidates: list[CandidateSkillRecord],
+        selected_skill_id: str,
+        behavior_probability: float,
+        actual_motives: tuple[float, ...],
+    ) -> AuxiliaryTrainingRecord:
+        """Build an AuxiliaryTrainingRecord from one online step for gate/motive head training.
+        """
+        certified_only = [c for c in certified_candidates if c.is_certified]
+        selected_idx = next(
+            (i for i, c in enumerate(certified_only) if c.skill_id == selected_skill_id), 0
+        )
+        skill_id_int = zlib.crc32(selected_skill_id.encode()) % self.model.num_skills
+        return AuxiliaryTrainingRecord(
+            context=tuple(float(v) for v in context),
+            skill_id=skill_id_int,
+            accept_label=1.0,
+            q_target=actual_motives,
+            behavior_probability=behavior_probability,
+            candidate_delta_r=tuple(c.delta_r for c in certified_only),
+            candidate_delta_n=tuple(tuple(c.delta_n) for c in certified_only),
+            selected_candidate_index=selected_idx,
+        )
 
     def save(self) -> None:
         """Persist policy checkpoint and weight store."""
