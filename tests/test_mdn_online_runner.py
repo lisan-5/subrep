@@ -354,6 +354,60 @@ def test_replay_training_triggers_auxiliary_batch_update(tmp_path):
     assert "best_val_loss" in result.auxiliary_metrics
 
 
+def test_replay_training_works_with_selected_and_gate_only_expansion(tmp_path):
+    replay = AuxiliaryReplayBuffer(capacity=10)
+    model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
+    store = WeightSetStore(num_objectives=2)
+    pipeline = RuntimeCertificationPipeline(
+        model=model,
+        weight_store=store,
+        config=RuntimePipelineConfig(
+            gate_type="CDS",
+            train_support_after_certify=False,
+            store_path=str(tmp_path / "weight_store.json"),
+        ),
+    )
+    trainer = MDNTrainer(model=model, device="cpu")
+    aux_trainer = MDNAuxiliaryTrainer(
+        model=model,
+        config=MDNAuxiliaryTrainerConfig(use_ips=True, max_epochs=1, batch_size=1),
+        device="cpu",
+    )
+    runner = MDNOnlineRunner(
+        model=model,
+        certification_pipeline=pipeline,
+        policy_trainer=trainer,
+        auxiliary_trainer=aux_trainer,
+        auxiliary_replay_buffer=replay,
+        auxiliary_replay_train_every_n_steps=1,
+        baseline_stats=_baseline_stats(),
+        checkpoint_path=str(tmp_path / "mdn_policy_best.pth"),
+        store_path=str(tmp_path / "weight_store.json"),
+        save_every_n_steps=10,
+        device="cpu",
+    )
+
+    runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[
+            _candidate_payload("skill_a", 1.7, (0.8, 0.4)),
+            _candidate_payload("skill_b", 0.1, (-0.5, -0.4)),
+        ],
+        execute_skill=_execute_skill,
+    )
+    result = runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[
+            _candidate_payload("skill_a", 1.7, (0.8, 0.4)),
+            _candidate_payload("skill_b", 0.1, (-0.5, -0.4)),
+        ],
+        execute_skill=_execute_skill,
+    )
+
+    assert result.auxiliary_metrics is not None
+    assert "best_val_loss" in result.auxiliary_metrics
+
+
 def test_replay_training_can_be_disabled_while_buffer_collects(tmp_path):
     replay = AuxiliaryReplayBuffer(capacity=10)
     model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)

@@ -14,6 +14,7 @@ from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_auxiliary_replay import (
     AuxiliaryReplayBuffer,
     AuxiliaryReplayEntry,
+    replay_entry_to_auxiliary_records,
     replay_entry_to_selected_auxiliary_record,
 )
 from generator.mdn_auxiliary_trainer import AuxiliaryTrainingRecord, MDNAuxiliaryTrainer
@@ -283,10 +284,9 @@ class MDNOnlineRunner:
         if len(entries) < 2:
             return None
 
-        records = [
-            replay_entry_to_selected_auxiliary_record(entry, num_skills=self.model.num_skills)
-            for entry in entries
-        ]
+        records: list[AuxiliaryTrainingRecord] = []
+        for entry in entries:
+            records.extend(replay_entry_to_auxiliary_records(entry, num_skills=self.model.num_skills))
         if self.auxiliary_trainer.config.use_ips:
             return self.auxiliary_trainer.train_probability_aware_records(records)
         return self.auxiliary_trainer.train_records(records)
