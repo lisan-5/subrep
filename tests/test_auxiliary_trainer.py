@@ -384,3 +384,21 @@ def test_dr_seeded_training_remains_stable():
     for _ in range(10):
         metrics = trainer.online_step(_probability_aware_record())
         assert np.isfinite(metrics["loss"])
+
+
+def test_gate_only_probability_aware_record_skips_q_loss():
+    model = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
+    trainer = MDNAuxiliaryTrainer(
+        model,
+        config=MDNAuxiliaryTrainerConfig(use_ips=True, max_epochs=1, batch_size=1),
+        device="cpu",
+    )
+
+    record = _probability_aware_record()
+    record.has_q_target = False
+    record.q_target = (0.0, 0.0)
+
+    metrics = trainer._run_probability_aware_epoch([record], training=True)
+
+    assert np.isfinite(metrics["loss"])
+    assert metrics["q_loss"] == pytest.approx(0.0)

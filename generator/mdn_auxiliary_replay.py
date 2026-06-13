@@ -67,8 +67,35 @@ def replay_entry_to_selected_auxiliary_record(entry: AuxiliaryReplayEntry, num_s
         skill_id=skill_id_int,
         accept_label=1.0,
         q_target=entry.actual_motives,
+        has_q_target=True,
         behavior_probability=entry.behavior_probability,
         candidate_delta_r=entry.candidate_delta_r,
         candidate_delta_n=entry.candidate_delta_n,
         selected_candidate_index=entry.selected_candidate_index,
     )
+
+
+def replay_entry_to_auxiliary_records(entry: AuxiliaryReplayEntry, num_skills: int) -> list[AuxiliaryTrainingRecord]:
+    """Convert one replay entry into selected + gate-only auxiliary records."""
+    if num_skills <= 0:
+        raise ValueError("num_skills must be positive")
+
+    records = [replay_entry_to_selected_auxiliary_record(entry, num_skills=num_skills)]
+    for index, skill_id in enumerate(entry.candidate_skill_ids):
+        if index == entry.selected_candidate_index:
+            continue
+        skill_id_int = zlib.crc32(skill_id.encode()) % int(num_skills)
+        records.append(
+            AuxiliaryTrainingRecord(
+                context=entry.context,
+                skill_id=skill_id_int,
+                accept_label=float(entry.candidate_accept_labels[index]),
+                q_target=tuple(0.0 for _ in entry.actual_motives),
+                has_q_target=False,
+                behavior_probability=entry.behavior_probability,
+                candidate_delta_r=entry.candidate_delta_r,
+                candidate_delta_n=entry.candidate_delta_n,
+                selected_candidate_index=entry.selected_candidate_index,
+            )
+        )
+    return records

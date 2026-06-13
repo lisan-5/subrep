@@ -34,6 +34,7 @@ class AuxiliaryTrainingRecord:
     skill_id: int
     accept_label: float
     q_target: tuple[float, ...]
+    has_q_target: bool = True
     behavior_probability: float | None = None
     motive_trajectory: tuple[tuple[float, ...], ...] | None = None
     # Delta info for ALL certified candidates at data-collection time.
@@ -116,6 +117,16 @@ class MDNAuxiliaryTrainer:
         q_loss = self.q_loss_fn(q_hat, q_target)
         total_loss = gate_loss + self.config.lambda_q * float(q_loss_weight) * q_loss
         return total_loss, gate_loss, q_loss
+
+    def _compute_gate_only_losses(
+        self,
+        gate_logits: torch.Tensor,
+        q_hat: torch.Tensor,
+        accept_label: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        gate_loss = self.gate_loss_fn(gate_logits, accept_label)
+        q_loss = torch.zeros((), dtype=q_hat.dtype, device=q_hat.device)
+        return gate_loss, gate_loss, q_loss
 
     def _compute_softmax_target_probability(
         self,
@@ -211,35 +222,42 @@ class MDNAuxiliaryTrainer:
 
             gate_logits, q_hat = self.model.forward_auxiliary(ctx, sid)
 
-            alpha, _ = self.model.forward_inference(ctx)
-            weights = alpha_to_mean_weights(alpha.detach().squeeze(0).cpu().numpy())
-            target_prob = self._compute_softmax_target_probability(
-                record.selected_candidate_index,
-                record.candidate_delta_r,
-                record.candidate_delta_n,
-                weights,
-            )
-            raw_weight = target_prob / max(float(record.behavior_probability), 1e-8)
-            ips_weight = min(raw_weight, float(self.config.ips_clip))
-
-            if self.config.use_doubly_robust:
-                baseline = q_hat.detach()
-                dr_target = baseline + ips_weight * (q_tgt - baseline)
-                batch_loss, gate_loss, q_loss = self._compute_losses(
+            if not record.has_q_target:
+                batch_loss, gate_loss, q_loss = self._compute_gate_only_losses(
                     gate_logits,
                     q_hat,
                     label,
-                    dr_target,
-                    q_loss_weight=1.0,
                 )
             else:
-                batch_loss, gate_loss, q_loss = self._compute_losses(
-                    gate_logits,
-                    q_hat,
-                    label,
-                    q_tgt,
-                    q_loss_weight=ips_weight,
+                alpha, _ = self.model.forward_inference(ctx)
+                weights = alpha_to_mean_weights(alpha.detach().squeeze(0).cpu().numpy())
+                target_prob = self._compute_softmax_target_probability(
+                    record.selected_candidate_index,
+                    record.candidate_delta_r,
+                    record.candidate_delta_n,
+                    weights,
                 )
+                raw_weight = target_prob / max(float(record.behavior_probability), 1e-8)
+                ips_weight = min(raw_weight, float(self.config.ips_clip))
+
+                if self.config.use_doubly_robust:
+                    baseline = q_hat.detach()
+                    dr_target = baseline + ips_weight * (q_tgt - baseline)
+                    batch_loss, gate_loss, q_loss = self._compute_losses(
+                        gate_logits,
+                        q_hat,
+                        label,
+                        dr_target,
+                        q_loss_weight=1.0,
+                    )
+                else:
+                    batch_loss, gate_loss, q_loss = self._compute_losses(
+                        gate_logits,
+                        q_hat,
+                        label,
+                        q_tgt,
+                        q_loss_weight=ips_weight,
+                    )
 
             if training:
                 batch_loss.backward()
@@ -494,6 +512,7 @@ def build_auxiliary_record(
         skill_id=int(skill_id),
         accept_label=float(bool(accept_label)),
         q_target=tuple(float(v) for v in q_target),
+        has_q_target=True,
         behavior_probability=stored_behavior_probability,
         motive_trajectory=None if motive_trajectory is None else tuple(
             tuple(float(value) for value in np.asarray(step, dtype=np.float32).reshape(-1))

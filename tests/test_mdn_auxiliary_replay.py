@@ -5,6 +5,7 @@ import pytest
 from generator.mdn_auxiliary_replay import (
     AuxiliaryReplayBuffer,
     AuxiliaryReplayEntry,
+    replay_entry_to_auxiliary_records,
     replay_entry_to_selected_auxiliary_record,
 )
 
@@ -67,3 +68,13 @@ def test_replay_entry_to_selected_auxiliary_record_preserves_probability_fields(
 def test_replay_entry_to_selected_auxiliary_record_rejects_invalid_num_skills():
     with pytest.raises(ValueError, match="num_skills"):
         replay_entry_to_selected_auxiliary_record(_entry(), num_skills=0)
+
+
+def test_replay_entry_to_auxiliary_records_emits_selected_and_gate_only_records():
+    records = replay_entry_to_auxiliary_records(_entry(), num_skills=128)
+
+    assert len(records) == 2
+    assert records[0].has_q_target is True
+    assert records[0].accept_label == 1.0
+    assert records[1].has_q_target is False
+    assert records[1].accept_label == 0.0
