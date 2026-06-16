@@ -9,6 +9,9 @@ import numpy as np
 import torch
 
 from generator.mdn import MotiveDecompositionNetwork
+from library.skill_library import SkillLibrary
+from library.skill_metadata import SkillEntry
+from library.skill_selector import select_best_skill_entry
 from utils.mdn_contracts import CandidateSkillRecord, MDNDecisionRecord
 from utils.mdn_logging import build_decision_record
 from utils.mdn_reward import compute_mdn_utility
@@ -17,6 +20,7 @@ from utils.mdn_selection import (
     select_best_candidate,
     softmax_selection_probabilities,
 )
+from utils.support_geometry import make_basis_query_directions
 
 
 @dataclass(frozen=True)
@@ -107,26 +111,13 @@ class MDNRuntimeSelector:
             ValueError: If no certified candidates are available.
             ValueError: If observation shape does not match the MDN input_dim.
         """
-        obs = np.asarray(observation, dtype=np.float32).reshape(-1)
-        if obs.shape[0] != self.model.input_dim:
-            raise ValueError(
-                f"observation has {obs.shape[0]} dimensions but MDN expects {self.model.input_dim}"
-            )
-        if not np.all(np.isfinite(obs)):
-            raise ValueError("observation must contain only finite values")
+        obs = self._validate_observation(observation)
 
         certified = [c for c in candidate_skills if c.is_certified]
         if not certified:
             raise ValueError("select() requires at least one certified candidate skill")
 
-        context_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device)
-
-        with torch.no_grad():
-            alpha_tensor, support_tensor = self.model.forward_inference(context_tensor)
-
-        alpha_np = alpha_tensor.squeeze(0).cpu().numpy()
-        support_np = support_tensor.squeeze(0).cpu().numpy()
-        weights = alpha_to_mean_weights(alpha_np)
+        alpha_np, support_np, weights = self._infer_mdn(obs)
 
         selected_skill_id, selected_score = select_best_candidate(certified, weights)
         softmax_probs = softmax_selection_probabilities(certified, weights)
@@ -142,6 +133,63 @@ class MDNRuntimeSelector:
             candidate_skills=tuple(candidate_skills),
             context=tuple(float(v) for v in obs),
         )
+
+    def select_from_library(
+        self,
+        observation: np.ndarray,
+        skill_library: SkillLibrary,
+    ) -> SelectionResult:
+        """Run MDN inference and select from stored, admissible SkillLibrary entries."""
+        obs = self._validate_observation(observation)
+        alpha_np, support_np, weights = self._infer_mdn(obs)
+        support_directions = make_basis_query_directions(len(support_np))
+        admissible_entries = skill_library.query_admissible(
+            current_weight=weights,
+            support_directions=support_directions,
+            support_values=support_np,
+        )
+        if not admissible_entries:
+            raise ValueError("select_from_library() requires at least one admissible stored skill")
+
+        selected_skill_id, selected_score = select_best_skill_entry(
+            admissible_entries,
+            weights,
+        )
+        candidate_records = tuple(
+            _candidate_record_from_entry(entry) for entry in admissible_entries
+        )
+        softmax_probs = softmax_selection_probabilities(candidate_records, weights)
+
+        return SelectionResult(
+            selected_skill_id=selected_skill_id,
+            selected_score=float(selected_score),
+            weights_used=weights,
+            alpha=alpha_np,
+            support_values=support_np,
+            behavior_probability=softmax_probs[selected_skill_id],
+            candidate_skills=candidate_records,
+            context=tuple(float(v) for v in obs),
+        )
+
+    def _validate_observation(self, observation: np.ndarray) -> np.ndarray:
+        obs = np.asarray(observation, dtype=np.float32).reshape(-1)
+        if obs.shape[0] != self.model.input_dim:
+            raise ValueError(
+                f"observation has {obs.shape[0]} dimensions but MDN expects {self.model.input_dim}"
+            )
+        if not np.all(np.isfinite(obs)):
+            raise ValueError("observation must contain only finite values")
+        return obs
+
+    def _infer_mdn(self, observation: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        context_tensor = torch.tensor(observation, dtype=torch.float32, device=self.device)
+        with torch.no_grad():
+            alpha_tensor, support_tensor = self.model.forward_inference(context_tensor)
+
+        alpha_np = alpha_tensor.squeeze(0).cpu().numpy()
+        support_np = support_tensor.squeeze(0).cpu().numpy()
+        weights = alpha_to_mean_weights(alpha_np)
+        return alpha_np, support_np, weights
 
     @classmethod
     def from_checkpoint(
@@ -162,3 +210,29 @@ class MDNRuntimeSelector:
         state = checkpoint.get("model_state_dict", checkpoint)
         model.load_state_dict(state)
         return cls(model=model, device=device)
+
+
+def _candidate_record_from_entry(entry: SkillEntry) -> CandidateSkillRecord:
+    metadata = {
+        "weight_region_type": entry.weight_region_type,
+    }
+    if entry.certification_context is not None:
+        metadata["certification_context"] = entry.certification_context
+    if entry.mdn_alpha is not None:
+        metadata["mdn_alpha"] = entry.mdn_alpha
+    if entry.wx_support_directions is not None:
+        metadata["wx_support_directions"] = entry.wx_support_directions
+    if entry.wx_support_values is not None:
+        metadata["wx_support_values"] = entry.wx_support_values
+
+    return CandidateSkillRecord(
+        skill_id=entry.skill_id,
+        delta_r=entry.delta_r,
+        delta_n=entry.delta_n,
+        is_certified=True,
+        gate_type=entry.gate_type,
+        metadata=metadata,
+        admission_margin=entry.admission_margin,
+        epsilon=entry.epsilon,
+        baseline_id=entry.certificate.baseline_id,
+    )

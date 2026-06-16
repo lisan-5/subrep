@@ -197,6 +197,8 @@ class RuntimeCertificationPipeline:
 
             if permanence_key in self._certified_skills:
                 stored = self._certified_skills[permanence_key]
+                if stored.is_certified and weights_used is not None:
+                    self._observe_certified_weight(context, weights_used)
                 updated_records.append(
                     CandidateSkillRecord(
                         skill_id=candidate.skill_id,
@@ -206,7 +208,7 @@ class RuntimeCertificationPipeline:
                         gate_type=stored.gate_type,
                         metadata=dict(candidate.metadata),
                         admission_margin=stored.admission_margin,
-                        epsilon=candidate.epsilon,
+                        epsilon=self._candidate_epsilon(candidate),
                         baseline_id=candidate.baseline_id,
                     )
                 )
@@ -224,11 +226,9 @@ class RuntimeCertificationPipeline:
                 np.array(candidate.delta_n),
             )
 
-            if is_certified and weights_used is not None:
-                self.weight_store.observe_certified_weight(context, weights_used)
-                if self.config.train_support_after_certify and self.support_trainer is not None:
-                    self.support_trainer.training_step()
-
+            if is_certified:
+                if weights_used is not None:
+                    self._observe_certified_weight(context, weights_used)
                 result = CertificationResult(
                     skill_id=candidate.skill_id,
                     is_certified=True,
@@ -254,7 +254,7 @@ class RuntimeCertificationPipeline:
                         gate_type=result.gate_type,
                         metadata=dict(candidate.metadata),
                         admission_margin=result.admission_margin,
-                        epsilon=candidate.epsilon,
+                        epsilon=self._candidate_epsilon(candidate),
                         baseline_id=candidate.baseline_id,
                     )
                 )
@@ -263,6 +263,26 @@ class RuntimeCertificationPipeline:
             updated_records.append(candidate)
 
         return updated_records
+
+    def get_certification_result(
+        self,
+        *,
+        context: np.ndarray,
+        skill_id: str,
+    ) -> CertificationResult | None:
+        """Return the stored certification result for a context/skill pair, if any."""
+        context_key = self.weight_store._context_key(context)
+        return self._certified_skills.get((context_key, skill_id))
+
+    def _candidate_epsilon(self, candidate: CandidateSkillRecord) -> float:
+        if candidate.gate_type == "PDS":
+            return self.config.pds_epsilon if candidate.epsilon is None else float(candidate.epsilon)
+        return 0.0
+
+    def _observe_certified_weight(self, context: np.ndarray, weights_used: np.ndarray) -> None:
+        self.weight_store.observe_certified_weight(context, weights_used)
+        if self.config.train_support_after_certify and self.support_trainer is not None:
+            self.support_trainer.training_step()
 
     def select_and_certify(
         self,

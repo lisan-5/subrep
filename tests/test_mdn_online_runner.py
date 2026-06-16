@@ -8,6 +8,7 @@ from generator.mdn_auxiliary_replay import AuxiliaryReplayBuffer
 from generator.mdn_auxiliary_trainer import MDNAuxiliaryTrainer, MDNAuxiliaryTrainerConfig
 from generator.mdn_online_runner import MDNOnlineRunner, StepResult
 from generator.mdn_trainer import MDNTrainer
+from library.skill_library import SkillLibrary
 from utils.mdn_runtime_pipeline import RuntimeCertificationPipeline, RuntimePipelineConfig
 from utils.weight_set_store import WeightSetStore
 
@@ -19,7 +20,11 @@ def _baseline_stats() -> dict[str, object]:
     }
 
 
-def _make_runner(tmp_path, save_every_n_steps: int = 10) -> MDNOnlineRunner:
+def _make_runner(
+    tmp_path,
+    save_every_n_steps: int = 10,
+    skill_library: SkillLibrary | None = None,
+) -> MDNOnlineRunner:
     model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
     store = WeightSetStore(num_objectives=2)
     pipeline = RuntimeCertificationPipeline(
@@ -41,6 +46,7 @@ def _make_runner(tmp_path, save_every_n_steps: int = 10) -> MDNOnlineRunner:
         store_path=str(tmp_path / "weight_store.json"),
         save_every_n_steps=save_every_n_steps,
         device="cpu",
+        skill_library=skill_library,
     )
 
 
@@ -116,6 +122,16 @@ def test_wx_expands_on_certification(tmp_path):
 
 def test_observation_dimension_is_enforced(tmp_path):
     runner = _make_runner(tmp_path)
+    with pytest.raises(ValueError, match="8"):
+        runner.step(
+            observation=np.zeros(14, dtype=np.float32),
+            candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+            execute_skill=_execute_skill,
+        )
+
+
+def test_library_runner_enforces_observation_dimension(tmp_path):
+    runner = _make_runner(tmp_path, skill_library=SkillLibrary())
     with pytest.raises(ValueError, match="8"):
         runner.step(
             observation=np.zeros(14, dtype=np.float32),
@@ -266,6 +282,22 @@ def test_replay_entry_added_when_buffer_is_wired(tmp_path):
     assert entry.candidate_skill_ids == ("skill_a",)
 
 
+def test_step_promotes_certified_skill_to_library(tmp_path):
+    skill_library = SkillLibrary()
+    runner = _make_runner(tmp_path, skill_library=skill_library)
+
+    result = runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+
+    assert result.selected_skill_id == "skill_a"
+    assert skill_library.get_skill("skill_a") is not None
+    assert result.decision_record is not None
+    assert result.decision_record.candidate_skills[0].skill_id == "skill_a"
+
+
 def test_replay_entry_not_added_when_no_certified_candidate_selected(tmp_path):
     replay = AuxiliaryReplayBuffer(capacity=10)
     model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
@@ -299,6 +331,53 @@ def test_replay_entry_not_added_when_no_certified_candidate_selected(tmp_path):
     )
 
     assert len(replay) == 0
+
+
+def test_step_selects_existing_library_skill_without_new_certification(tmp_path):
+    skill_library = SkillLibrary()
+    runner = _make_runner(tmp_path, skill_library=skill_library)
+    context = np.array([0.1] * 8, dtype=np.float32)
+
+    runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+    result = runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_b", 0.1, (-0.5, -0.4))],
+        execute_skill=_execute_skill,
+    )
+
+    assert result.certified_skill_ids == ()
+    assert result.selected_skill_id == "skill_a"
+    assert result.decision_record is not None
+
+
+def test_library_selection_adds_replay_entry_for_stored_skill(tmp_path):
+    replay = AuxiliaryReplayBuffer(capacity=10)
+    skill_library = SkillLibrary()
+    runner = _make_runner(tmp_path, skill_library=skill_library)
+    runner.auxiliary_replay_buffer = replay
+    context = np.array([0.1] * 8, dtype=np.float32)
+
+    runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+    result = runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_b", 0.1, (-0.5, -0.4))],
+        execute_skill=_execute_skill,
+    )
+
+    assert result.selected_skill_id == "skill_a"
+    assert len(replay) == 2
+    entry = replay.last()
+    assert entry is not None
+    assert entry.selected_skill_id == "skill_a"
+    assert entry.candidate_skill_ids == ("skill_a",)
 
 
 def test_replay_training_triggers_auxiliary_batch_update(tmp_path):

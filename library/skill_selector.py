@@ -5,13 +5,45 @@ Sits on top of SkillLibrary and provides different selection strategies:
 
     Stage 3-4:   select_random()  — uniform random baseline
     Stage 5: select_by_payoff()   — greedy via SkillGenerator
-    Stage 6: select_by_mdn()      — MDN-weighted contextual
+    Stage 6: select_by_mdn()      — MDN-weighted contextual with W_x admissibility
 """
 
 from __future__ import annotations
 from typing import Optional
 import numpy as np
+import torch
 from .skill_library import SkillLibrary
+from .skill_metadata import SkillEntry
+from utils.mdn_selection import alpha_to_mean_weights
+from utils.support_geometry import make_basis_query_directions
+
+
+def score_skill_entry(entry: SkillEntry, weight: np.ndarray) -> float:
+    """Score a stored skill using the MDN scalarization delta_r + w^T delta_n."""
+    w = np.asarray(weight, dtype=np.float64).reshape(-1)
+    delta_n = np.asarray(entry.delta_n, dtype=np.float64)
+    return float(entry.delta_r + np.dot(w, delta_n))
+
+
+def select_best_skill_entry(
+    entries: list[SkillEntry] | tuple[SkillEntry, ...],
+    weight: np.ndarray,
+) -> tuple[str, float]:
+    """Select the highest-scoring stored skill with stable lexical tie-breaks."""
+    if not entries:
+        raise ValueError("select_best_skill_entry() requires at least one skill")
+
+    best_entry = entries[0]
+    best_score = score_skill_entry(best_entry, weight)
+    for entry in entries[1:]:
+        score = score_skill_entry(entry, weight)
+        if score > best_score or (
+            score == best_score and entry.skill_id < best_entry.skill_id
+        ):
+            best_entry = entry
+            best_score = score
+
+    return best_entry.skill_id, best_score
 
 
 class SkillSelector:
@@ -78,23 +110,39 @@ class SkillSelector:
         )
 
     def select_by_mdn(self, obs: np.ndarray) -> Optional[str]:
-        """
-        Select the skill with the highest MDN-weighted score.
+        """Select the best admissible skill using MDN alpha and W_x support"""
 
-        Uses the MotiveDecompositionNetwork to get context-aware weights w,
-        then scores each skill as:
+        if self.mdn is None:
+            raise ValueError(
+                "select_by_mdn() requires a trained MotiveDecompositionNetwork"
+            )
 
-            score = r̂ + w^T n̂
+        # skip MDN inference when library is empty
+        if self.library.count() == 0:
+            return None
 
-        where r̂ is the predicted payoff and n̂ is the predicted motive vector.
-        This combines the Generator's predictions with the MDN's contextual
-        weighting to balance payoff against motive trade-offs.
-
-        Args:
-            obs: Current environment observation (8D for LunarLander).
-
-        """
-        raise NotImplementedError(
-            "select_by_mdn() requires SkillGenerator + MDN integration (Stage 6). "
-            "Use select_random() for the current baseline."
+        obs_tensor = torch.tensor(
+            np.asarray(obs, dtype=np.float32), dtype=torch.float32
         )
+
+        with torch.no_grad():
+            alpha, support_pred = self.mdn.forward_inference(obs_tensor)
+
+        alpha_np = alpha.cpu().numpy()
+        weight = alpha_to_mean_weights(alpha_np)
+        support_values = support_pred.cpu().numpy()
+
+        num_objectives = len(support_values)
+        support_directions = make_basis_query_directions(num_objectives)
+
+        admissible = self.library.query_admissible(
+            current_weight=weight,
+            support_directions=support_directions,
+            support_values=support_values,
+        )
+
+        if not admissible:
+            return None
+
+        selected_skill_id, _ = select_best_skill_entry(admissible, weight)
+        return selected_skill_id
