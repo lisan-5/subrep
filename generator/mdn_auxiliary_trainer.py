@@ -89,6 +89,8 @@ class MDNAuxiliaryTrainer:
     def __init__(self, model: MotiveDecompositionNetwork, config: Optional[MDNAuxiliaryTrainerConfig] = None, device: Optional[str] = None) -> None:
         self.model = model
         self.config = config or MDNAuxiliaryTrainerConfig()
+        if self.config.use_ips and self.config.use_doubly_robust:
+            raise ValueError("use_ips and use_doubly_robust are mutually exclusive auxiliary estimators")
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.model.to(self.device)
         self.gate_loss_fn = BCEWithLogitsLoss()
@@ -281,15 +283,15 @@ class MDNAuxiliaryTrainer:
     def online_step(self, record: AuxiliaryTrainingRecord) -> dict[str, float]:
         """Run one online gradient step on a single auxiliary training record.
         """
-        if self.config.use_ips:
+        if self.config.use_ips or self.config.use_doubly_robust:
             if record.behavior_probability is None:
-                raise ValueError("online_step with use_ips=True requires behavior_probability")
+                raise ValueError("probability-aware online_step requires behavior_probability")
             if record.candidate_delta_r is None:
-                raise ValueError("online_step with use_ips=True requires candidate_delta_r")
+                raise ValueError("probability-aware online_step requires candidate_delta_r")
             if record.candidate_delta_n is None:
-                raise ValueError("online_step with use_ips=True requires candidate_delta_n")
+                raise ValueError("probability-aware online_step requires candidate_delta_n")
             if record.selected_candidate_index is None:
-                raise ValueError("online_step with use_ips=True requires selected_candidate_index")
+                raise ValueError("probability-aware online_step requires selected_candidate_index")
             return self._run_probability_aware_epoch([record], training=True)
 
         self.model.train()
@@ -312,9 +314,9 @@ class MDNAuxiliaryTrainer:
         }
 
     def train_records(self, records: Iterable[AuxiliaryTrainingRecord]) -> dict[str, Any]:
-        if self.config.use_ips:
+        if self.config.use_ips or self.config.use_doubly_robust:
             raise ValueError(
-                "use_ips=True requires train_probability_aware_records(...), not train_records(...)"
+                "probability-aware auxiliary estimators require train_probability_aware_records(...), not train_records(...)"
             )
         dataset = AuxiliaryDataset(records)
         val_size = max(1, int(round(len(dataset) * self.config.validation_split)))

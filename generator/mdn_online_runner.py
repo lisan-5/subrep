@@ -367,7 +367,7 @@ class MDNOnlineRunner:
         records: list[AuxiliaryTrainingRecord] = []
         for entry in entries:
             records.extend(replay_entry_to_auxiliary_records(entry, num_skills=self.model.num_skills))
-        if self.auxiliary_trainer.config.use_ips:
+        if self.auxiliary_trainer.config.use_ips or self.auxiliary_trainer.config.use_doubly_robust:
             return self.auxiliary_trainer.train_probability_aware_records(records)
         return self.auxiliary_trainer.train_records(records)
 

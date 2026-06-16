@@ -173,6 +173,18 @@ def test_auxiliary_trainer_raises_when_ips_mode_enabled_without_probability_awar
         raise AssertionError("Expected ValueError when IPS mode is enabled without probability-aware dataset support")
 
 
+def test_auxiliary_trainer_raises_when_dr_mode_enabled_without_probability_aware_dataset():
+    model = MotiveDecompositionNetwork(input_dim=14, num_skills=16, num_objectives=2)
+    trainer = MDNAuxiliaryTrainer(
+        model,
+        config=MDNAuxiliaryTrainerConfig(use_doubly_robust=True, batch_size=8, max_epochs=1),
+        device="cpu",
+    )
+
+    with pytest.raises(ValueError, match="train_probability_aware_records"):
+        trainer.train_records(_synthetic_records())
+
+
 def test_probability_aware_auxiliary_training_path_runs(tmp_path: Path):
     records = []
     for index in range(20):
@@ -301,7 +313,7 @@ def test_dr_mode_runs_and_loss_is_finite():
     model = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(
         model,
-        config=MDNAuxiliaryTrainerConfig(use_ips=True, use_doubly_robust=True, max_epochs=1, batch_size=1),
+        config=MDNAuxiliaryTrainerConfig(use_doubly_robust=True, max_epochs=1, batch_size=1),
         device="cpu",
     )
 
@@ -338,7 +350,7 @@ def test_dr_and_ips_modes_are_independently_selectable():
     model_dr = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
     trainer_dr = MDNAuxiliaryTrainer(
         model_dr,
-        config=MDNAuxiliaryTrainerConfig(use_ips=True, use_doubly_robust=True, max_epochs=1, batch_size=1),
+        config=MDNAuxiliaryTrainerConfig(use_doubly_robust=True, max_epochs=1, batch_size=1),
         device="cpu",
     )
     dr_metrics = trainer_dr._run_probability_aware_epoch([record], training=True)
@@ -362,7 +374,7 @@ def test_dr_single_record_does_not_crash():
     model = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(
         model,
-        config=MDNAuxiliaryTrainerConfig(use_ips=True, use_doubly_robust=True, max_epochs=1, batch_size=1),
+        config=MDNAuxiliaryTrainerConfig(use_doubly_robust=True, max_epochs=1, batch_size=1),
         device="cpu",
     )
 
@@ -377,7 +389,7 @@ def test_dr_seeded_training_remains_stable():
     model = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(
         model,
-        config=MDNAuxiliaryTrainerConfig(use_ips=True, use_doubly_robust=True, max_epochs=1, batch_size=1),
+        config=MDNAuxiliaryTrainerConfig(use_doubly_robust=True, max_epochs=1, batch_size=1),
         device="cpu",
     )
 
@@ -402,3 +414,14 @@ def test_gate_only_probability_aware_record_skips_q_loss():
 
     assert np.isfinite(metrics["loss"])
     assert metrics["q_loss"] == pytest.approx(0.0)
+
+
+def test_ips_and_dr_modes_are_mutually_exclusive():
+    model = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        MDNAuxiliaryTrainer(
+            model,
+            config=MDNAuxiliaryTrainerConfig(use_ips=True, use_doubly_robust=True),
+            device="cpu",
+        )
