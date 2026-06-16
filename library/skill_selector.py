@@ -13,8 +13,37 @@ from typing import Optional
 import numpy as np
 import torch
 from .skill_library import SkillLibrary
+from .skill_metadata import SkillEntry
 from utils.mdn_selection import alpha_to_mean_weights
 from utils.support_geometry import make_basis_query_directions
+
+
+def score_skill_entry(entry: SkillEntry, weight: np.ndarray) -> float:
+    """Score a stored skill using the MDN scalarization delta_r + w^T delta_n."""
+    w = np.asarray(weight, dtype=np.float64).reshape(-1)
+    delta_n = np.asarray(entry.delta_n, dtype=np.float64)
+    return float(entry.delta_r + np.dot(w, delta_n))
+
+
+def select_best_skill_entry(
+    entries: list[SkillEntry] | tuple[SkillEntry, ...],
+    weight: np.ndarray,
+) -> tuple[str, float]:
+    """Select the highest-scoring stored skill with stable lexical tie-breaks."""
+    if not entries:
+        raise ValueError("select_best_skill_entry() requires at least one skill")
+
+    best_entry = entries[0]
+    best_score = score_skill_entry(best_entry, weight)
+    for entry in entries[1:]:
+        score = score_skill_entry(entry, weight)
+        if score > best_score or (
+            score == best_score and entry.skill_id < best_entry.skill_id
+        ):
+            best_entry = entry
+            best_score = score
+
+    return best_entry.skill_id, best_score
 
 
 class SkillSelector:
@@ -115,20 +144,5 @@ class SkillSelector:
         if not admissible:
             return None
 
-        w = np.asarray(weight, dtype=np.float64).reshape(-1)
-
-        best_id: Optional[str] = None
-        best_score = -float("inf")
-
-        for entry in admissible:
-            delta_n = np.asarray(entry.delta_n, dtype=np.float64)
-            score = float(entry.delta_r + np.dot(w, delta_n))
-
-            if score > best_score or (
-                score == best_score
-                and (best_id is None or entry.skill_id < best_id)
-            ):
-                best_id = entry.skill_id
-                best_score = score
-
-        return best_id
+        selected_skill_id, _ = select_best_skill_entry(admissible, weight)
+        return selected_skill_id

@@ -10,13 +10,15 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
+from certification.certificate_schema import Certificate
 from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_auxiliary_trainer import AuxiliaryTrainingRecord, MDNAuxiliaryTrainer
 from generator.mdn_runtime_selector import MDNRuntimeSelector
 from generator.mdn_trainer import MDNTrainer
+from library.skill_library import SkillLibrary
 from utils.mdn_contracts import CandidateSkillRecord, MDNDecisionRecord
 from utils.mdn_record_builder import build_candidate_skill_records
-from utils.mdn_runtime_pipeline import RuntimeCertificationPipeline
+from utils.mdn_runtime_pipeline import RuntimeCertificationPipeline, certification_result_to_certificate_kwargs
 from utils.weight_set_store import WeightSetStore
 
 
@@ -50,6 +52,7 @@ class MDNOnlineRunner:
         device: Optional[str] = None,
         certificate_store: Optional[Any] = None,
         certificate_metadata: Optional[dict[str, Any]] = None,
+        skill_library: Optional[SkillLibrary] = None,
     ) -> None:
         if save_every_n_steps <= 0:
             raise ValueError("save_every_n_steps must be positive")
@@ -65,6 +68,7 @@ class MDNOnlineRunner:
         self.selector = MDNRuntimeSelector(model=model, device=device or str(policy_trainer.device))
         self.certificate_store = certificate_store
         self.certificate_metadata: dict[str, Any] = dict(certificate_metadata) if certificate_metadata else {}
+        self.skill_library = skill_library
         self._step_count = 0
 
     def step(
@@ -97,7 +101,13 @@ class MDNOnlineRunner:
         )
         if self.certificate_store is not None:
             self._write_certified_to_store(certified_candidates)
-        if not certified_skill_ids:
+        if self.skill_library is not None:
+            self._write_certified_to_skill_library(
+                context=context,
+                candidates=certified_candidates,
+                execute_skill=execute_skill,
+            )
+        if self.skill_library is None and not certified_skill_ids:
             self._step_count += 1
             self._maybe_save()
             return StepResult(
@@ -109,7 +119,24 @@ class MDNOnlineRunner:
                 certified_skill_ids=certified_skill_ids,
             )
 
-        selection = self.selector.select(context, certified_candidates)
+        if self.skill_library is not None:
+            try:
+                selection = self.selector.select_from_library(context, self.skill_library)
+            except ValueError as exc:
+                if "admissible stored skill" not in str(exc):
+                    raise
+                self._step_count += 1
+                self._maybe_save()
+                return StepResult(
+                    selected_skill_id=None,
+                    behavior_probability=None,
+                    weights_used=None,
+                    decision_record=None,
+                    policy_metrics=None,
+                    certified_skill_ids=certified_skill_ids,
+                )
+        else:
+            selection = self.selector.select(context, certified_candidates)
         outcome = dict(execute_skill(selection.selected_skill_id))
         if "actual_payoff" not in outcome or "actual_motives" not in outcome:
             raise ValueError("execute_skill must return 'actual_payoff' and 'actual_motives'")
@@ -190,6 +217,59 @@ class MDNOnlineRunner:
             except (ValueError, TypeError):
                 pass
 
+    def _write_certified_to_skill_library(
+        self,
+        *,
+        context: np.ndarray,
+        candidates: list[CandidateSkillRecord],
+        execute_skill: Callable[[str], dict[str, Any]],
+    ) -> None:
+        """Promote runtime-certified candidates into static SkillLibrary storage."""
+        if self.skill_library is None:
+            return
+
+        timestamp = datetime.now().isoformat()
+        meta = self.certificate_metadata
+        for candidate in candidates:
+            if not candidate.is_certified:
+                continue
+            result = self.certification_pipeline.get_certification_result(
+                context=context,
+                skill_id=candidate.skill_id,
+            )
+            if result is None:
+                continue
+
+            epsilon = self.certification_pipeline.config.pds_epsilon if result.gate_type == "PDS" else 0.0
+            try:
+                kwargs = certification_result_to_certificate_kwargs(
+                    result,
+                    timestamp=timestamp,
+                    seed=int(meta.get("seed", 0)),
+                    gamma=float(meta.get("gamma", 1.0)),
+                    baseline_id=candidate.baseline_id or str(meta.get("baseline_id", "default")),
+                    environment=str(meta.get("environment", "mo-lunar-lander-v3")),
+                    episode_length=int(meta.get("episode_length", 1)),
+                    version=str(meta.get("version", "1.0")),
+                    epsilon=epsilon,
+                )
+                certificate = Certificate(**kwargs)
+                policy = candidate.metadata.get("policy")
+                if policy is None:
+                    policy = lambda _obs=None, _skill_id=candidate.skill_id: execute_skill(_skill_id)
+                self.skill_library.add_skill(
+                    candidate.skill_id,
+                    certificate,
+                    policy,
+                    weight_region_type=certificate.weight_region_type,
+                    certification_context=certificate.certification_context,
+                    mdn_alpha=certificate.mdn_alpha,
+                    wx_support_directions=certificate.wx_support_directions,
+                    wx_support_values=certificate.wx_support_values,
+                )
+            except (ValueError, TypeError):
+                continue
+
     def _build_aux_record(
         self,
         *,
@@ -242,6 +322,7 @@ class MDNOnlineRunner:
         device: Optional[str] = None,
         certificate_store: Optional[Any] = None,
         certificate_metadata: Optional[dict[str, Any]] = None,
+        skill_library: Optional[SkillLibrary] = None,
     ) -> "MDNOnlineRunner":
         """Load persisted runtime state into a new online runner."""
         runner = cls(
@@ -256,6 +337,7 @@ class MDNOnlineRunner:
             device=device,
             certificate_store=certificate_store,
             certificate_metadata=certificate_metadata,
+            skill_library=skill_library,
         )
         checkpoint_file = Path(checkpoint_path)
         if checkpoint_file.exists():

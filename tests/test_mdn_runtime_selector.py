@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import numpy as np
 import pytest
 
+from certification.certificate_schema import Certificate
 from generator.mdn import MotiveDecompositionNetwork
 from generator.mdn_runtime_selector import MDNRuntimeSelector, SelectionResult
+from library.skill_library import SkillLibrary
 from utils.mdn_contracts import CandidateSkillRecord
 from utils.mdn_logging import serialize_decision_record
 
@@ -30,6 +34,24 @@ def _make_candidate(skill_id: str, delta_r: float, delta_n: tuple, certified: bo
 
 def _obs(dim: int = 8) -> np.ndarray:
     return np.zeros(dim, dtype=np.float32)
+
+
+def _make_certificate(skill_id: str, delta_r: float, delta_n: tuple[float, float]) -> Certificate:
+    return Certificate(
+        skill_id=skill_id,
+        gate_type="CDS",
+        delta_r=delta_r,
+        delta_n=delta_n,
+        admission_margin=delta_r + min(delta_n),
+        epsilon=0.0,
+        timestamp=datetime.now().isoformat(),
+        seed=0,
+        gamma=1.0,
+        baseline_id="default",
+        environment="mo-lunar-lander-v3",
+        episode_length=1,
+        version="1.0",
+    )
 
 
 class TestMDNRuntimeSelectorSelect:
@@ -131,6 +153,19 @@ class TestMDNRuntimeSelectorSelect:
         candidates = [_make_candidate("skill_a", 0.5, (0.3, 0.2), True)]
         with pytest.raises(ValueError, match="finite"):
             selector.select(np.full(8, float("nan"), dtype=np.float32), candidates)
+
+    def test_select_from_library_returns_loggable_result(self):
+        model = _make_model()
+        selector = MDNRuntimeSelector(model)
+        library = SkillLibrary()
+        certificate = _make_certificate("skill_a", 0.5, (0.3, 0.2))
+        assert library.add_skill("skill_a", certificate, lambda obs: None)
+
+        result = selector.select_from_library(_obs(), library)
+
+        assert result.selected_skill_id == "skill_a"
+        assert result.behavior_probability == pytest.approx(1.0)
+        assert result.candidate_skills[0].metadata["weight_region_type"] == "FULL_SIMPLEX"
 
 
 class TestSelectionResultBuildDecisionRecord:
