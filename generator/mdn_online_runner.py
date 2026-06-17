@@ -310,8 +310,11 @@ class MDNOnlineRunner:
         """
         certified_only = [c for c in certified_candidates if c.is_certified]
         selected_idx = next(
-            (i for i, c in enumerate(certified_only) if c.skill_id == selected_skill_id), 0
+            (i for i, c in enumerate(certified_only) if c.skill_id == selected_skill_id),
+            None,
         )
+        if selected_idx is None:
+            raise ValueError(f"selected_skill_id {selected_skill_id!r} not found in certified candidates")
         skill_id_int = zlib.crc32(selected_skill_id.encode()) % self.model.num_skills
         return AuxiliaryTrainingRecord(
             context=tuple(float(v) for v in context),
@@ -334,7 +337,17 @@ class MDNOnlineRunner:
         actual_payoff: float,
         actual_motives: tuple[float, ...],
     ) -> AuxiliaryReplayEntry:
-        selected_idx = next(i for i, candidate in enumerate(candidates) if candidate.skill_id == selected_skill_id)
+        selected_idx = next(
+            (i for i, candidate in enumerate(candidates) if candidate.skill_id == selected_skill_id),
+            None,
+        )
+        if selected_idx is None:
+            raise ValueError(f"selected_skill_id {selected_skill_id!r} not found in candidates")
+        certified_candidate_indices = tuple(
+            index for index, candidate in enumerate(candidates) if candidate.is_certified
+        )
+        if selected_idx not in certified_candidate_indices:
+            raise ValueError(f"selected_skill_id {selected_skill_id!r} is not certified")
         return AuxiliaryReplayEntry(
             context=tuple(float(v) for v in context),
             selected_skill_id=selected_skill_id,
@@ -346,6 +359,7 @@ class MDNOnlineRunner:
             candidate_accept_labels=tuple(float(candidate.is_certified) for candidate in candidates),
             candidate_delta_r=tuple(float(candidate.delta_r) for candidate in candidates),
             candidate_delta_n=tuple(tuple(float(v) for v in candidate.delta_n) for candidate in candidates),
+            certified_candidate_indices=certified_candidate_indices,
         )
 
     def _maybe_train_auxiliary_from_replay(self) -> dict[str, float] | None:

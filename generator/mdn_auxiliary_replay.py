@@ -24,6 +24,7 @@ class AuxiliaryReplayEntry:
     candidate_accept_labels: tuple[float, ...]
     candidate_delta_r: tuple[float, ...]
     candidate_delta_n: tuple[tuple[float, ...], ...]
+    certified_candidate_indices: tuple[int, ...]
 
 
 class AuxiliaryReplayBuffer:
@@ -61,6 +62,21 @@ def replay_entry_to_selected_auxiliary_record(entry: AuxiliaryReplayEntry, num_s
     """
     if num_skills <= 0:
         raise ValueError("num_skills must be positive")
+    if entry.selected_candidate_index not in entry.certified_candidate_indices:
+        raise ValueError(
+            f"selected_candidate_index {entry.selected_candidate_index} is not certified"
+        )
+
+    selected_certified_index = entry.certified_candidate_indices.index(
+        entry.selected_candidate_index
+    )
+    certified_delta_r = tuple(
+        entry.candidate_delta_r[index] for index in entry.certified_candidate_indices
+    )
+    certified_delta_n = tuple(
+        entry.candidate_delta_n[index] for index in entry.certified_candidate_indices
+    )
+
     skill_id_int = zlib.crc32(entry.selected_skill_id.encode()) % int(num_skills)
     return AuxiliaryTrainingRecord(
         context=entry.context,
@@ -69,9 +85,9 @@ def replay_entry_to_selected_auxiliary_record(entry: AuxiliaryReplayEntry, num_s
         q_target=entry.actual_motives,
         has_q_target=True,
         behavior_probability=entry.behavior_probability,
-        candidate_delta_r=entry.candidate_delta_r,
-        candidate_delta_n=entry.candidate_delta_n,
-        selected_candidate_index=entry.selected_candidate_index,
+        candidate_delta_r=certified_delta_r,
+        candidate_delta_n=certified_delta_n,
+        selected_candidate_index=selected_certified_index,
     )
 
 

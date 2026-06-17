@@ -9,6 +9,7 @@ from generator.mdn_auxiliary_trainer import MDNAuxiliaryTrainer, MDNAuxiliaryTra
 from generator.mdn_online_runner import MDNOnlineRunner, StepResult
 from generator.mdn_trainer import MDNTrainer
 from library.skill_library import SkillLibrary
+from utils.mdn_contracts import CandidateSkillRecord
 from utils.mdn_runtime_pipeline import RuntimeCertificationPipeline, RuntimePipelineConfig
 from utils.weight_set_store import WeightSetStore
 
@@ -280,6 +281,7 @@ def test_replay_entry_added_when_buffer_is_wired(tmp_path):
     assert entry is not None
     assert entry.selected_skill_id == "skill_a"
     assert entry.candidate_skill_ids == ("skill_a",)
+    assert entry.certified_candidate_indices == (0,)
 
 
 def test_step_promotes_certified_skill_to_library(tmp_path):
@@ -378,6 +380,75 @@ def test_library_selection_adds_replay_entry_for_stored_skill(tmp_path):
     assert entry is not None
     assert entry.selected_skill_id == "skill_a"
     assert entry.candidate_skill_ids == ("skill_a",)
+    assert entry.certified_candidate_indices == (0,)
+
+
+def test_aux_record_raises_when_selected_skill_missing(tmp_path):
+    runner = _make_runner(tmp_path)
+    candidate = CandidateSkillRecord(
+        skill_id="skill_a",
+        delta_r=0.7,
+        delta_n=(0.3, 0.2),
+        is_certified=True,
+        gate_type="CDS",
+        admission_margin=0.5,
+        epsilon=0.0,
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        runner._build_aux_record(
+            context=np.array([0.1] * 8, dtype=np.float32),
+            certified_candidates=[candidate],
+            selected_skill_id="missing",
+            behavior_probability=1.0,
+            actual_motives=(0.8, 0.4),
+        )
+
+
+def test_aux_replay_entry_raises_when_selected_skill_missing(tmp_path):
+    runner = _make_runner(tmp_path)
+    candidate = CandidateSkillRecord(
+        skill_id="skill_a",
+        delta_r=0.7,
+        delta_n=(0.3, 0.2),
+        is_certified=True,
+        gate_type="CDS",
+        admission_margin=0.5,
+        epsilon=0.0,
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        runner._build_aux_replay_entry(
+            context=np.array([0.1] * 8, dtype=np.float32),
+            candidates=[candidate],
+            selected_skill_id="missing",
+            behavior_probability=1.0,
+            actual_payoff=1.7,
+            actual_motives=(0.8, 0.4),
+        )
+
+
+def test_aux_replay_entry_raises_when_selected_skill_uncertified(tmp_path):
+    runner = _make_runner(tmp_path)
+    candidate = CandidateSkillRecord(
+        skill_id="skill_a",
+        delta_r=-0.2,
+        delta_n=(-0.3, -0.2),
+        is_certified=False,
+        gate_type="CDS",
+        admission_margin=None,
+        epsilon=0.0,
+    )
+
+    with pytest.raises(ValueError, match="not certified"):
+        runner._build_aux_replay_entry(
+            context=np.array([0.1] * 8, dtype=np.float32),
+            candidates=[candidate],
+            selected_skill_id="skill_a",
+            behavior_probability=1.0,
+            actual_payoff=1.7,
+            actual_motives=(0.8, 0.4),
+        )
 
 
 def test_replay_training_triggers_auxiliary_batch_update(tmp_path):

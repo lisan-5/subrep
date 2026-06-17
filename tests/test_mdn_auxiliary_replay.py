@@ -22,6 +22,7 @@ def _entry() -> AuxiliaryReplayEntry:
         candidate_accept_labels=(1.0, 0.0),
         candidate_delta_r=(0.7, -0.2),
         candidate_delta_n=((0.3, 0.2), (-0.4, -0.5)),
+        certified_candidate_indices=(0,),
     )
 
 
@@ -48,6 +49,7 @@ def test_replay_buffer_enforces_capacity():
         candidate_accept_labels=(1.0,),
         candidate_delta_r=(0.1,),
         candidate_delta_n=((0.1, 0.5),),
+        certified_candidate_indices=(0,),
     )
     buffer.append(first)
     buffer.append(second)
@@ -61,8 +63,49 @@ def test_replay_entry_to_selected_auxiliary_record_preserves_probability_fields(
 
     assert record.behavior_probability == 0.75
     assert record.selected_candidate_index == 0
-    assert record.candidate_delta_r == (0.7, -0.2)
+    assert record.candidate_delta_r == (0.7,)
     assert record.q_target == (0.8, 0.4)
+
+
+def test_replay_entry_to_selected_auxiliary_record_remaps_certified_index():
+    entry = AuxiliaryReplayEntry(
+        context=(0.1,) * 8,
+        selected_skill_id="skill_b",
+        selected_candidate_index=1,
+        behavior_probability=1.0,
+        actual_payoff=1.7,
+        actual_motives=(0.8, 0.4),
+        candidate_skill_ids=("skill_a", "skill_b", "skill_c"),
+        candidate_accept_labels=(1.0, 1.0, 0.0),
+        candidate_delta_r=(0.7, 0.6, -0.2),
+        candidate_delta_n=((0.3, 0.2), (0.2, 0.4), (-0.4, -0.5)),
+        certified_candidate_indices=(0, 1),
+    )
+
+    record = replay_entry_to_selected_auxiliary_record(entry, num_skills=128)
+
+    assert record.selected_candidate_index == 1
+    assert record.candidate_delta_r == (0.7, 0.6)
+    assert record.candidate_delta_n == ((0.3, 0.2), (0.2, 0.4))
+
+
+def test_replay_entry_to_selected_auxiliary_record_rejects_uncertified_selected_index():
+    entry = AuxiliaryReplayEntry(
+        context=(0.1,) * 8,
+        selected_skill_id="skill_b",
+        selected_candidate_index=1,
+        behavior_probability=1.0,
+        actual_payoff=1.7,
+        actual_motives=(0.8, 0.4),
+        candidate_skill_ids=("skill_a", "skill_b"),
+        candidate_accept_labels=(1.0, 0.0),
+        candidate_delta_r=(0.7, -0.2),
+        candidate_delta_n=((0.3, 0.2), (-0.4, -0.5)),
+        certified_candidate_indices=(0,),
+    )
+
+    with pytest.raises(ValueError, match="not certified"):
+        replay_entry_to_selected_auxiliary_record(entry, num_skills=128)
 
 
 def test_replay_entry_to_selected_auxiliary_record_rejects_invalid_num_skills():
@@ -78,3 +121,4 @@ def test_replay_entry_to_auxiliary_records_emits_selected_and_gate_only_records(
     assert records[0].accept_label == 1.0
     assert records[1].has_q_target is False
     assert records[1].accept_label == 0.0
+    assert records[1].candidate_delta_r == (0.7, -0.2)
