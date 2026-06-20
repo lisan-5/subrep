@@ -215,24 +215,24 @@ class MDNOnlineRunner:
                 )
                 if result is None:
                     continue
-                epsilon = (
-                    self.certification_pipeline.config.pds_epsilon
-                    if result.gate_type == "PDS"
-                    else 0.0
-                )
                 kwargs = certification_result_to_certificate_kwargs(
                     result,
                     timestamp=timestamp,
                     seed=int(meta.get("seed", 0)),
                     gamma=float(meta.get("gamma", 1.0)),
-                    baseline_id=candidate.baseline_id or "default",
+                    baseline_id=candidate.baseline_id or str(meta.get("baseline_id", "default")),
                     environment=str(meta.get("environment", "mo-lunar-lander-v3")),
                     episode_length=int(meta.get("episode_length", 1)),
                     version=str(meta.get("version", "1.0")),
-                    epsilon=epsilon,
+                    epsilon=result.epsilon,
                 )
                 cert = Certificate(**kwargs)
-                self.certificate_store.add(cert)
+                added = self.certificate_store.add(cert)
+                if not added:
+                    logger.warning(
+                        "Failed to write runtime certificate for skill '%s': store rejected it",
+                        candidate.skill_id,
+                    )
             except (ValueError, TypeError) as exc:
                 logger.warning(
                     "Failed to write runtime certificate for skill '%s': %s",
@@ -263,7 +263,6 @@ class MDNOnlineRunner:
             if result is None:
                 continue
 
-            epsilon = self.certification_pipeline.config.pds_epsilon if result.gate_type == "PDS" else 0.0
             try:
                 kwargs = certification_result_to_certificate_kwargs(
                     result,
@@ -274,7 +273,7 @@ class MDNOnlineRunner:
                     environment=str(meta.get("environment", "mo-lunar-lander-v3")),
                     episode_length=int(meta.get("episode_length", 1)),
                     version=str(meta.get("version", "1.0")),
-                    epsilon=epsilon,
+                    epsilon=result.epsilon,
                 )
                 certificate = Certificate(**kwargs)
                 policy = candidate.metadata.get("policy")

@@ -58,6 +58,11 @@ class _CollectingCertificateStore:
         return True
 
 
+class _RejectingCertificateStore:
+    def add(self, certificate):
+        return False
+
+
 class _RejectingSkillLibrary(SkillLibrary):
     def add_skill(self, *args, **kwargs) -> bool:
         return False
@@ -301,6 +306,7 @@ def test_certificate_store_write_preserves_mdn_audit_fields(tmp_path):
     store = _CollectingCertificateStore()
     runner = _make_runner(tmp_path)
     runner.certificate_store = store
+    runner.certificate_metadata = {"baseline_id": "runtime_baseline"}
     context = np.array([0.1] * 8, dtype=np.float32)
     runner.certification_pipeline.weight_store.observe_certified_weight(
         context,
@@ -316,6 +322,7 @@ def test_certificate_store_write_preserves_mdn_audit_fields(tmp_path):
     assert len(store.certificates) == 1
     certificate = store.certificates[0]
     assert certificate.weight_region_type == "MDN_WX"
+    assert certificate.baseline_id == "runtime_baseline"
     assert certificate.certification_context == tuple(float(v) for v in context)
     assert certificate.mdn_alpha is not None
     assert certificate.wx_support_directions == ((1.0, 0.0), (0.0, 1.0))
@@ -334,3 +341,17 @@ def test_skill_library_promotion_failure_is_logged(tmp_path, caplog):
 
     assert result.selected_skill_id is None
     assert "Failed to promote certified skill 'skill_a' into SkillLibrary" in caplog.text
+
+
+def test_certificate_store_rejection_is_logged(tmp_path, caplog):
+    runner = _make_runner(tmp_path)
+    runner.certificate_store = _RejectingCertificateStore()
+
+    with caplog.at_level("WARNING", logger="generator.mdn_online_runner"):
+        runner.step(
+            observation=np.array([0.1] * 8, dtype=np.float32),
+            candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+            execute_skill=_execute_skill,
+        )
+
+    assert "Failed to write runtime certificate for skill 'skill_a': store rejected it" in caplog.text
