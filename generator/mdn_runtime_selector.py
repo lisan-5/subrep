@@ -186,8 +186,8 @@ class MDNRuntimeSelector:
         with torch.no_grad():
             alpha_tensor, support_tensor = self.model.forward_inference(context_tensor)
 
-        alpha_np = alpha_tensor.squeeze(0).cpu().numpy()
-        support_np = support_tensor.squeeze(0).cpu().numpy()
+        alpha_np = alpha_tensor.detach().cpu().numpy().reshape(-1)
+        support_np = support_tensor.detach().cpu().numpy().reshape(-1)
         weights = alpha_to_mean_weights(alpha_np)
         return alpha_np, support_np, weights
 

@@ -145,9 +145,6 @@ class MDNOnlineRunner:
         if "actual_payoff" not in outcome or "actual_motives" not in outcome:
             raise ValueError("execute_skill must return 'actual_payoff' and 'actual_motives'")
 
-        if self.skill_library is not None and selection.selected_skill_id not in certified_skill_ids:
-            self.certification_pipeline.observe_certified_weight(context, selection.weights_used)
-
         record = selection.build_decision_record(
             actual_payoff=float(outcome["actual_payoff"]),
             actual_motives=outcome["actual_motives"],
@@ -160,19 +157,14 @@ class MDNOnlineRunner:
         if self.auxiliary_trainer is not None:
             aux_record = self._build_aux_record(
                 context=context,
-                certified_candidates=certified_candidates,
+                candidate_skills=selection.candidate_skills,
                 selected_skill_id=selection.selected_skill_id,
                 behavior_probability=selection.behavior_probability,
                 actual_motives=tuple(float(v) for v in outcome["actual_motives"]),
             )
             auxiliary_metrics = self.auxiliary_trainer.online_step(aux_record)
 
-        self.certification_pipeline.certify_candidate_skills(
-            context=context,
-            candidate_skills=certified_candidates,
-            baseline_stats=self.baseline_stats,
-            weights_used=selection.weights_used,
-        )
+        self.certification_pipeline.observe_certified_weight(context, selection.weights_used)
 
         self._step_count += 1
         self._maybe_save()
@@ -278,7 +270,7 @@ class MDNOnlineRunner:
                 certificate = Certificate(**kwargs)
                 policy = candidate.metadata.get("policy")
                 if policy is None:
-                    policy = lambda _obs=None, _skill_id=candidate.skill_id: execute_skill(_skill_id)
+                    policy = lambda _obs=None, _skill_id=candidate.skill_id, _execute_skill=execute_skill: _execute_skill(_skill_id)
                 promoted = self.skill_library.add_skill(
                     candidate.skill_id,
                     certificate,
@@ -306,17 +298,18 @@ class MDNOnlineRunner:
         self,
         *,
         context: np.ndarray,
-        certified_candidates: list[CandidateSkillRecord],
+        candidate_skills: tuple[CandidateSkillRecord, ...],
         selected_skill_id: str,
         behavior_probability: float,
         actual_motives: tuple[float, ...],
     ) -> AuxiliaryTrainingRecord:
         """Build an AuxiliaryTrainingRecord from one online step for gate/motive head training.
         """
-        certified_only = [c for c in certified_candidates if c.is_certified]
-        selected_idx = next(
-            (i for i, c in enumerate(certified_only) if c.skill_id == selected_skill_id), 0
-        )
+        candidates = tuple(candidate_skills)
+        selected_matches = [i for i, c in enumerate(candidates) if c.skill_id == selected_skill_id]
+        if not selected_matches:
+            raise ValueError("selected_skill_id must be present in auxiliary candidate_skills")
+        selected_idx = selected_matches[0]
         skill_id_int = zlib.crc32(selected_skill_id.encode()) % self.model.num_skills
         return AuxiliaryTrainingRecord(
             context=tuple(float(v) for v in context),
@@ -324,8 +317,8 @@ class MDNOnlineRunner:
             accept_label=1.0,
             q_target=actual_motives,
             behavior_probability=behavior_probability,
-            candidate_delta_r=tuple(c.delta_r for c in certified_only),
-            candidate_delta_n=tuple(tuple(c.delta_n) for c in certified_only),
+            candidate_delta_r=tuple(c.delta_r for c in candidates),
+            candidate_delta_n=tuple(tuple(c.delta_n) for c in candidates),
             selected_candidate_index=selected_idx,
         )
 
@@ -381,6 +374,9 @@ class MDNOnlineRunner:
             runner.policy_trainer = restored
             runner.selector = MDNRuntimeSelector(model=restored.model, device=device or str(restored.device))
             runner.model = restored.model
+            runner.certification_pipeline.model = restored.model
+            if runner.auxiliary_trainer is not None:
+                runner.auxiliary_trainer.model = restored.model
 
         store_file = Path(runner.store_path) if runner.store_path is not None else None
         if store_file is not None and store_file.exists():

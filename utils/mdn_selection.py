@@ -51,13 +51,13 @@ def score_candidate(candidate: CandidateSkillRecord, weights: np.ndarray) -> flo
     if not candidate.is_certified:
         raise ValueError(f"candidate {candidate.skill_id!r} is not certified and cannot be scored")
 
-    weights = np.asarray(weights, dtype=np.float32).reshape(-1)
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
     if weights.shape != (2,):
         raise ValueError(f"weights must have shape (2,), got {weights.shape}")
     if not np.all(np.isfinite(weights)):
         raise ValueError("weights must contain only finite values")
 
-    return float(candidate.delta_r + float(np.dot(weights, np.asarray(candidate.delta_n, dtype=np.float32))))
+    return float(candidate.delta_r + float(np.dot(weights, np.asarray(candidate.delta_n, dtype=np.float64))))
 
 
 def select_best_candidate(candidates: tuple[CandidateSkillRecord, ...] | list[CandidateSkillRecord], weights: np.ndarray) -> tuple[str, float]:

@@ -206,7 +206,10 @@ def test_full_loop_runs_for_five_steps(tmp_path):
         assert isinstance(result, StepResult)
 
 
-def _make_runner_with_auxiliary(tmp_path) -> MDNOnlineRunner:
+def _make_runner_with_auxiliary(
+    tmp_path,
+    skill_library: SkillLibrary | None = None,
+) -> MDNOnlineRunner:
     model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
     store = WeightSetStore(num_objectives=2)
     pipeline = RuntimeCertificationPipeline(
@@ -234,6 +237,7 @@ def _make_runner_with_auxiliary(tmp_path) -> MDNOnlineRunner:
         store_path=str(tmp_path / "weight_store.json"),
         save_every_n_steps=10,
         device="cpu",
+        skill_library=skill_library,
     )
 
 
@@ -355,3 +359,77 @@ def test_certificate_store_rejection_is_logged(tmp_path, caplog):
         )
 
     assert "Failed to write runtime certificate for skill 'skill_a': store rejected it" in caplog.text
+
+
+def test_auxiliary_record_uses_library_selection_candidates(tmp_path):
+    skill_library = SkillLibrary()
+    runner = _make_runner_with_auxiliary(tmp_path, skill_library=skill_library)
+    context = np.array([0.1] * 8, dtype=np.float32)
+
+    runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+    result = runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_b", 0.1, (-0.5, -0.4))],
+        execute_skill=_execute_skill,
+    )
+
+    assert result.certified_skill_ids == ()
+    assert result.selected_skill_id == "skill_a"
+    assert result.auxiliary_metrics is not None
+
+
+def test_wx_records_selected_weight_once_per_step_with_multiple_certified_candidates(tmp_path):
+    runner = _make_runner(tmp_path)
+
+    runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[
+            _candidate_payload("skill_a", 1.7, (0.8, 0.4)),
+            _candidate_payload("skill_c", 1.8, (0.9, 0.5)),
+        ],
+        execute_skill=lambda skill_id: {
+            "actual_payoff": 1.8,
+            "actual_motives": (0.9, 0.5),
+        },
+    )
+
+    assert runner.certification_pipeline.weight_store.total_vertex_count() == 1
+
+
+def test_load_aligns_certification_pipeline_model(tmp_path):
+    runner = _make_runner(tmp_path, save_every_n_steps=1)
+    runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+
+    restored_model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
+    pipeline_model = MotiveDecompositionNetwork(input_dim=8, num_objectives=2)
+    restored_store = WeightSetStore(num_objectives=2)
+    restored_pipeline = RuntimeCertificationPipeline(
+        model=pipeline_model,
+        weight_store=restored_store,
+        config=RuntimePipelineConfig(
+            gate_type="CDS",
+            train_support_after_certify=False,
+            store_path=str(tmp_path / "weight_store.json"),
+        ),
+    )
+    restored_trainer = MDNTrainer(model=restored_model, device="cpu")
+
+    restored_runner = MDNOnlineRunner.load(
+        model=restored_model,
+        certification_pipeline=restored_pipeline,
+        policy_trainer=restored_trainer,
+        baseline_stats=_baseline_stats(),
+        checkpoint_path=str(tmp_path / "mdn_policy_best.pth"),
+        store_path=str(tmp_path / "weight_store.json"),
+        device="cpu",
+    )
+
+    assert restored_runner.certification_pipeline.model is restored_runner.model
