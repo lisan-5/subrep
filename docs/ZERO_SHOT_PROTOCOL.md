@@ -82,3 +82,9 @@ This protocol is **intentionally independent** of `SkillLibrary` and its runtime
 - Clear responsibility boundaries between certification and selection.
 - The evaluator can be used by any downstream consumer (tests, demos, future selectors).
 - No risk of circular dependencies with the library's admission logic.
+
+## 9. Runtime Integration
+
+While the evaluator remains a standalone mathematical tool, the SubRep runtime provides a unified entry point via `SkillLibrary.query_admissible()`. This unified method handles both globally and contextually certified skills simultaneously:
+- **`FULL_SIMPLEX`** skills are automatically returned as admissible (they are universally safe).
+- **`MDN_WX`** skills are processed through the $h_{W_x}(-\Delta n)$ validation logic using the context geometry passed at runtime.

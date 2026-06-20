@@ -119,6 +119,39 @@ class ZeroShotEvaluator:
             "beats_baseline": weighted_score > 0.0,
         }
 
+    # ── Library Integration ──────────────────────────────────────────────────
+
+    def is_reusable_via_library(
+        self,
+        library,
+        skill_id: str,
+        current_weight: list | np.ndarray,
+        support_directions: list | np.ndarray | None = None,
+        support_values: list | np.ndarray | None = None,
+    ) -> bool:
+        """Check if a skill is reusable via the runtime SkillLibrary.
+
+        Delegates the admissibility check to the library's unified
+        `query_admissible()` method. This is the recommended path for
+        runtime selection, replacing standalone mathematical evaluation.
+
+        Args:
+            library: The SkillLibrary instance.
+            skill_id: The ID of the skill to check.
+            current_weight: The active motive weight.
+            support_directions: (MDN_WX only) Core W_x directions.
+            support_values: (MDN_WX only) Core W_x thresholds.
+
+        Returns:
+            True if the skill is found in the returned admissible list.
+        """
+        admissible = library.query_admissible(
+            current_weight=current_weight,
+            support_directions=support_directions,
+            support_values=support_values,
+        )
+        return any(entry.skill_id == skill_id for entry in admissible)
+
     # ── Internal helpers ─────────────────────────────────────────────────────
 
     @staticmethod

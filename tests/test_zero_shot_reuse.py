@@ -234,3 +234,79 @@ class TestEmpiricalValidation:
         """evaluate_performance must also validate the weight vector."""
         with pytest.raises(ValueError):
             evaluator.evaluate_performance(cds_full_simplex_cert, [0.3, 0.3])
+
+
+# ── Runtime Library Integration ──────────────────────────────────────────────
+
+from library.skill_library import SkillLibrary
+
+class TestLibraryQueryAdmissible:
+    """Validate that zero-shot reuse flows correctly through the runtime library."""
+
+    DIRECTIONS = [[1, 0], [0, 1]]
+    VALUES = [0.8, 0.4]
+
+    @pytest.fixture
+    def populated_library(self, cds_full_simplex_cert) -> SkillLibrary:
+        """Build a library with both global and contextual skills."""
+        library = SkillLibrary()
+
+        # Add a globally certified FULL_SIMPLEX skill
+        library.add_skill(
+            skill_id=cds_full_simplex_cert.skill_id,
+            certificate=cds_full_simplex_cert,
+            policy=lambda obs: 0,
+            weight_region_type=FULL_SIMPLEX,
+        )
+
+        # Add an MDN_WX certified skill (matching the spec example: h_Wx=0.14)
+        mdn_cert = _make_cert(
+            skill_id="mdn-spec-example",
+            delta_r=0.15,
+            delta_n=(-0.2, 0.1),
+        )
+        library.add_skill(
+            skill_id="mdn-spec-example",
+            certificate=mdn_cert,
+            policy=lambda obs: 0,
+            weight_region_type=MDN_WX,
+            certification_context=(1.0, 0.0, 0.0), # Mock audit fields
+            mdn_alpha=(2.0, 1.0),
+            wx_support_directions=tuple(tuple(d) for d in self.DIRECTIONS),
+            wx_support_values=tuple(self.VALUES),
+        )
+
+        return library
+
+    def test_library_returns_full_simplex_always(self, evaluator, populated_library):
+        """FULL_SIMPLEX skills should be admissible regardless of MDN context."""
+        assert evaluator.is_reusable_via_library(
+            populated_library,
+            "cds-global",
+            current_weight=[0.9, 0.1],
+            support_directions=self.DIRECTIONS,
+            support_values=self.VALUES,
+        ) is True
+
+    def test_library_returns_mdn_when_feasible(self, evaluator, populated_library):
+        """MDN_WX skills should be admissible when the geometry supports it."""
+        assert evaluator.is_reusable_via_library(
+            populated_library,
+            "mdn-spec-example",
+            current_weight=[0.5, 0.5],
+            support_directions=self.DIRECTIONS,
+            support_values=self.VALUES,
+        ) is True
+
+    def test_library_excludes_mdn_when_cost_too_high(self, evaluator, populated_library):
+        """MDN_WX skills must be excluded if the geometry implies the cost exceeds delta_r."""
+        # SV=[1.0, 0.8] -> vertices=[1.0, 0.0] and [0.2, 0.8]
+        # v1 dot [0.2, -0.1] = 0.2 > 0.15 (delta_r). Fails.
+        result = evaluator.is_reusable_via_library(
+            populated_library,
+            "mdn-spec-example",
+            current_weight=[0.5, 0.5],
+            support_directions=self.DIRECTIONS,
+            support_values=[1.0, 0.8],
+        )
+        assert result is False
