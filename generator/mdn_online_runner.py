@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import zlib
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +21,9 @@ from utils.mdn_contracts import CandidateSkillRecord, MDNDecisionRecord
 from utils.mdn_record_builder import build_candidate_skill_records
 from utils.mdn_runtime_pipeline import RuntimeCertificationPipeline, certification_result_to_certificate_kwargs
 from utils.weight_set_store import WeightSetStore
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -100,7 +104,7 @@ class MDNOnlineRunner:
             candidate.skill_id for candidate in certified_candidates if candidate.is_certified
         )
         if self.certificate_store is not None:
-            self._write_certified_to_store(certified_candidates)
+            self._write_certified_to_store(context, certified_candidates)
         if self.skill_library is not None:
             self._write_certified_to_skill_library(
                 context=context,
@@ -141,6 +145,9 @@ class MDNOnlineRunner:
         if "actual_payoff" not in outcome or "actual_motives" not in outcome:
             raise ValueError("execute_skill must return 'actual_payoff' and 'actual_motives'")
 
+        if self.skill_library is not None and selection.selected_skill_id not in certified_skill_ids:
+            self.certification_pipeline.observe_certified_weight(context, selection.weights_used)
+
         record = selection.build_decision_record(
             actual_payoff=float(outcome["actual_payoff"]),
             actual_motives=outcome["actual_motives"],
@@ -179,7 +186,11 @@ class MDNOnlineRunner:
             auxiliary_metrics=auxiliary_metrics,
         )
 
-    def _write_certified_to_store(self, candidates: list[CandidateSkillRecord]) -> None:
+    def _write_certified_to_store(
+        self,
+        context: np.ndarray,
+        candidates: list[CandidateSkillRecord],
+    ) -> None:
         """Write newly certified candidates to the MeTTa CertificateStore.
 
         The store deduplicates by skill_id so calling this on every step is safe.
@@ -198,13 +209,19 @@ class MDNOnlineRunner:
             if candidate.admission_margin is None or candidate.admission_margin < 0.0:
                 continue
             try:
-                cert = Certificate(
+                result = self.certification_pipeline.get_certification_result(
+                    context=context,
                     skill_id=candidate.skill_id,
-                    gate_type=candidate.gate_type,
-                    delta_r=candidate.delta_r,
-                    delta_n=candidate.delta_n,
-                    admission_margin=candidate.admission_margin,
-                    epsilon=candidate.epsilon if candidate.epsilon is not None else 0.0,
+                )
+                if result is None:
+                    continue
+                epsilon = (
+                    self.certification_pipeline.config.pds_epsilon
+                    if result.gate_type == "PDS"
+                    else 0.0
+                )
+                kwargs = certification_result_to_certificate_kwargs(
+                    result,
                     timestamp=timestamp,
                     seed=int(meta.get("seed", 0)),
                     gamma=float(meta.get("gamma", 1.0)),
@@ -212,10 +229,16 @@ class MDNOnlineRunner:
                     environment=str(meta.get("environment", "mo-lunar-lander-v3")),
                     episode_length=int(meta.get("episode_length", 1)),
                     version=str(meta.get("version", "1.0")),
+                    epsilon=epsilon,
                 )
+                cert = Certificate(**kwargs)
                 self.certificate_store.add(cert)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "Failed to write runtime certificate for skill '%s': %s",
+                    candidate.skill_id,
+                    exc,
+                )
 
     def _write_certified_to_skill_library(
         self,
@@ -257,7 +280,7 @@ class MDNOnlineRunner:
                 policy = candidate.metadata.get("policy")
                 if policy is None:
                     policy = lambda _obs=None, _skill_id=candidate.skill_id: execute_skill(_skill_id)
-                self.skill_library.add_skill(
+                promoted = self.skill_library.add_skill(
                     candidate.skill_id,
                     certificate,
                     policy,
@@ -267,7 +290,17 @@ class MDNOnlineRunner:
                     wx_support_directions=certificate.wx_support_directions,
                     wx_support_values=certificate.wx_support_values,
                 )
-            except (ValueError, TypeError):
+                if not promoted:
+                    logger.warning(
+                        "Failed to promote certified skill '%s' into SkillLibrary",
+                        candidate.skill_id,
+                    )
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "Failed to promote certified skill '%s' into SkillLibrary: %s",
+                    candidate.skill_id,
+                    exc,
+                )
                 continue
 
     def _build_aux_record(

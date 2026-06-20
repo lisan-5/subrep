@@ -49,6 +49,20 @@ def _make_runner(
     )
 
 
+class _CollectingCertificateStore:
+    def __init__(self) -> None:
+        self.certificates = []
+
+    def add(self, certificate):
+        self.certificates.append(certificate)
+        return True
+
+
+class _RejectingSkillLibrary(SkillLibrary):
+    def add_skill(self, *args, **kwargs) -> bool:
+        return False
+
+
 def _candidate_payload(skill_id: str, payoff: float, motives: tuple[float, float]) -> dict[str, object]:
     return {
         "context": (0.1,) * 8,
@@ -277,3 +291,46 @@ def test_step_selects_existing_library_skill_without_new_certification(tmp_path)
     assert result.certified_skill_ids == ()
     assert result.selected_skill_id == "skill_a"
     assert result.decision_record is not None
+    assert runner.certification_pipeline.weight_store.total_vertex_count() == 2
+    vertices = runner.certification_pipeline.weight_store.get_weight_set(context).get_vertices_array()
+    assert vertices is not None
+    np.testing.assert_allclose(vertices[-1], result.weights_used)
+
+
+def test_certificate_store_write_preserves_mdn_audit_fields(tmp_path):
+    store = _CollectingCertificateStore()
+    runner = _make_runner(tmp_path)
+    runner.certificate_store = store
+    context = np.array([0.1] * 8, dtype=np.float32)
+    runner.certification_pipeline.weight_store.observe_certified_weight(
+        context,
+        np.array([0.7, 0.3], dtype=np.float32),
+    )
+
+    runner.step(
+        observation=context,
+        candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+        execute_skill=_execute_skill,
+    )
+
+    assert len(store.certificates) == 1
+    certificate = store.certificates[0]
+    assert certificate.weight_region_type == "MDN_WX"
+    assert certificate.certification_context == tuple(float(v) for v in context)
+    assert certificate.mdn_alpha is not None
+    assert certificate.wx_support_directions == ((1.0, 0.0), (0.0, 1.0))
+    assert certificate.wx_support_values == pytest.approx((0.7, 0.3))
+
+
+def test_skill_library_promotion_failure_is_logged(tmp_path, caplog):
+    runner = _make_runner(tmp_path, skill_library=_RejectingSkillLibrary())
+
+    with caplog.at_level("WARNING", logger="generator.mdn_online_runner"):
+        result = runner.step(
+            observation=np.array([0.1] * 8, dtype=np.float32),
+            candidate_skill_payloads=[_candidate_payload("skill_a", 1.7, (0.8, 0.4))],
+            execute_skill=_execute_skill,
+        )
+
+    assert result.selected_skill_id is None
+    assert "Failed to promote certified skill 'skill_a' into SkillLibrary" in caplog.text
