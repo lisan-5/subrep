@@ -167,7 +167,7 @@ class RuntimeCertificationPipeline:
             weight_set,
             epsilon=effective_epsilon,
         )
-        audit_fields = self._build_audit_fields(context, weight_set, delta_n)
+        audit_fields = self._build_audit_fields(context, weight_set)
 
         if is_certified and weights_used is not None:
             self.weight_store.observe_certified_weight(context, weights_used)
@@ -246,7 +246,6 @@ class RuntimeCertificationPipeline:
             audit_fields = self._build_audit_fields(
                 context,
                 weight_set,
-                np.array(candidate.delta_n),
             )
 
             if is_certified:
@@ -410,7 +409,6 @@ class RuntimeCertificationPipeline:
         self,
         context: np.ndarray,
         weight_set: Optional[WeightSet],
-        delta_n: np.ndarray,
     ) -> dict[str, object]:
         """Return certificate audit fields for the active certification region."""
         gate_type = self.config.gate_type.upper()

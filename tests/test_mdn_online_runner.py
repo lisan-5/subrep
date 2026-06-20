@@ -382,6 +382,23 @@ def test_auxiliary_record_uses_library_selection_candidates(tmp_path):
     assert result.auxiliary_metrics is not None
 
 
+def test_auxiliary_record_excludes_uncertified_candidates_from_ips_set(tmp_path):
+    runner = _make_runner_with_auxiliary(tmp_path)
+
+    result = runner.step(
+        observation=np.array([0.1] * 8, dtype=np.float32),
+        candidate_skill_payloads=[
+            _candidate_payload("skill_a", 1.7, (0.8, 0.4)),
+            _candidate_payload("skill_b", 0.1, (-0.5, -0.4)),
+        ],
+        execute_skill=_execute_skill,
+    )
+
+    assert result.decision_record is not None
+    assert result.auxiliary_metrics is not None
+    assert tuple(candidate.skill_id for candidate in result.decision_record.candidate_skills) == ("skill_a",)
+
+
 def test_wx_records_selected_weight_once_per_step_with_multiple_certified_candidates(tmp_path):
     runner = _make_runner(tmp_path)
 

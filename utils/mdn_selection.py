@@ -70,7 +70,9 @@ def select_best_candidate(candidates: tuple[CandidateSkillRecord, ...] | list[Ca
     best_score = score_candidate(best_candidate, weights)
     for candidate in certified_candidates[1:]:
         candidate_score = score_candidate(candidate, weights)
-        if candidate_score > best_score:
+        if candidate_score > best_score or (
+            candidate_score == best_score and candidate.skill_id < best_candidate.skill_id
+        ):
             best_candidate = candidate
             best_score = candidate_score
 
@@ -87,13 +89,13 @@ def softmax_selection_probabilities(
     if not certified:
         raise ValueError("softmax_selection_probabilities requires at least one certified candidate")
 
-    weights = np.asarray(weights, dtype=np.float32).reshape(-1)
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
     if not np.all(np.isfinite(weights)):
         raise ValueError("weights must contain only finite values")
 
     scores = np.array(
-        [float(c.delta_r) + float(np.dot(weights, np.asarray(c.delta_n, dtype=np.float32))) for c in certified],
-        dtype=np.float32,
+        [float(c.delta_r) + float(np.dot(weights, np.asarray(c.delta_n, dtype=np.float64))) for c in certified],
+        dtype=np.float64,
     )
     scores -= np.max(scores)
     exp_scores = np.exp(scores)

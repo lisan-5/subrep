@@ -130,7 +130,7 @@ class MDNRuntimeSelector:
             alpha=alpha_np,
             support_values=support_np,
             behavior_probability=behavior_probability,
-            candidate_skills=tuple(candidate_skills),
+            candidate_skills=tuple(certified),
             context=tuple(float(v) for v in obs),
         )
 
@@ -183,6 +183,7 @@ class MDNRuntimeSelector:
 
     def _infer_mdn(self, observation: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         context_tensor = torch.tensor(observation, dtype=torch.float32, device=self.device)
+        self.model.eval()
         with torch.no_grad():
             alpha_tensor, support_tensor = self.model.forward_inference(context_tensor)
 
