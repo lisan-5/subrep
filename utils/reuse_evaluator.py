@@ -57,32 +57,47 @@ class ZeroShotEvaluator:
         Returns:
             True if reuse is mathematically safe; False otherwise.
         """
+        # 1. Mandatory weight validation
         w = np.asarray(new_weight, dtype=np.float64)
         self._validate_simplex(w)
 
+        # 2. Check region type (default to FULL_SIMPLEX for legacy support)
+        region_type = getattr(certificate, "weight_region_type", "FULL_SIMPLEX")
+
         # ── Mode 1: Full-simplex global reuse ────────────────────────────
-        if support_directions is None or support_values is None:
+        if region_type == "FULL_SIMPLEX":
             # Any valid simplex weight is safe for a full-simplex certificate.
             return True
 
         # ── Mode 2: MDN/contextual reuse ─────────────────────────────────
-        dirs = np.asarray(support_directions, dtype=np.float64)
-        vals = np.asarray(support_values, dtype=np.float64)
-        # NOTE: Do NOT validate that vals sums to 1 — they are thresholds, not
-        # weights.  E.g., [0.8, 0.4] is valid even though 0.8 + 0.4 ≠ 1.
+        # Blocker case: Contextual skill without context is unsafe.
+        if support_directions is None or support_values is None:
+            return False
 
-        delta_n = np.asarray(certificate.delta_n, dtype=np.float64)
-        delta_r = float(certificate.delta_r)
-        epsilon = float(certificate.epsilon)
+        # Delegate to SkillLibrary for the math (eliminates logic duplication)
+        from library.skill_library import SkillLibrary
 
-        h_wx = self._compute_h_wx(neg_delta_n=-delta_n, directions=dirs, values=vals)
+        temp_lib = SkillLibrary()
+        
+        # Add the skill with a dummy policy
+        temp_lib.add_skill(
+            skill_id=certificate.skill_id,
+            certificate=certificate,
+            policy=lambda s, a: None,
+            weight_region_type="MDN_WX",
+            certification_context=certificate.certification_context,
+            mdn_alpha=certificate.mdn_alpha,
+            wx_support_directions=certificate.wx_support_directions,
+            wx_support_values=certificate.wx_support_values
+        )
 
-        if certificate.gate_type == "CDS":
-            return delta_r >= h_wx
-        elif certificate.gate_type == "PDS":
-            return delta_r >= h_wx - epsilon
-        else:
-            raise ValueError(f"Unknown gate_type: {certificate.gate_type!r}")
+        admissible = temp_lib.query_admissible(
+            current_weight=w,
+            support_directions=support_directions,
+            support_values=support_values
+        )
+
+        return any(entry.skill_id == certificate.skill_id for entry in admissible)
 
     # ── Secondary: Empirical performance validation ──────────────────────────
 
@@ -165,41 +180,3 @@ class ZeroShotEvaluator:
             raise ValueError(
                 f"Weight components must sum to 1, got sum={w.sum():.6f}"
             )
-
-    @staticmethod
-    def _compute_h_wx(
-        neg_delta_n: np.ndarray,
-        directions: np.ndarray,
-        values: np.ndarray,
-    ) -> float:
-        """Compute h_Wx(-delta_n): worst-case motive cost over W_x.
-
-        For the 2-objective case:
-            Given support constraints  u_j · w <= h_j  and  sum(w) == 1,
-            the feasible weight set W_x is an interval whose vertices are:
-                v1 = [h[0],  1 - h[0]]
-                v2 = [1 - h[1],  h[1]]
-            h_Wx(-delta_n) = max over vertices of  v · (-delta_n).
-
-        For future 3+ objective cases, this would need a proper support-function
-        or linear-feasibility calculation (LP).
-        """
-        num_objectives = len(neg_delta_n)
-
-        if num_objectives == 2 and len(values) == 2:
-            # Derive interval vertices from support constraints.
-            v1 = np.array([values[0], 1.0 - values[0]], dtype=np.float64)
-            v2 = np.array([1.0 - values[1], values[1]], dtype=np.float64)
-
-            # Worst-case cost is the max dot product across vertices.
-            score_1 = float(np.dot(v1, neg_delta_n))
-            score_2 = float(np.dot(v2, neg_delta_n))
-            return max(score_1, score_2)
-
-        # General case (3+ objectives): would require an LP solver.
-        # For now, fall back to evaluating at the vertices implied by each
-        # direction individually.
-        raise NotImplementedError(
-            f"h_Wx computation for {num_objectives} objectives is not yet "
-            f"implemented. Requires a linear-feasibility solver."
-        )

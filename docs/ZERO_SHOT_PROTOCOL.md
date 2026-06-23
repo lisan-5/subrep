@@ -83,8 +83,9 @@ This protocol is **intentionally independent** of `SkillLibrary` and its runtime
 - The evaluator can be used by any downstream consumer (tests, demos, future selectors).
 - No risk of circular dependencies with the library's admission logic.
 
-## 9. Runtime Integration
+### 9. Runtime Integration (SkillLibrary)
 
-While the evaluator remains a standalone mathematical tool, the SubRep runtime provides a unified entry point via `SkillLibrary.query_admissible()`. This unified method handles both globally and contextually certified skills simultaneously:
-- **`FULL_SIMPLEX`** skills are automatically returned as admissible (they are universally safe).
-- **`MDN_WX`** skills are processed through the $h_{W_x}(-\Delta n)$ validation logic using the context geometry passed at runtime.
+For production runtime selection, reuse checks are performed through `SkillLibrary.query_admissible()`. The `ZeroShotEvaluator.is_safe_mathematically()` and `is_reusable_via_library()` methods now delegate to this unified library path to ensure 100% mathematical consistency across all architectural components.
+
+- **FULL_SIMPLEX** certificates allow global reuse (no support geometry required).
+- **MDN_WX** certificates strictly require valid `support_directions` and `support_values` at runtime; otherwise, reuse is blocked to maintain safety.
