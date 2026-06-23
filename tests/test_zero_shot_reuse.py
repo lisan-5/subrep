@@ -28,6 +28,10 @@ def _make_cert(
     gate_type: str = "CDS",
     epsilon: float = 0.0,
     weight_region_type: str = "FULL_SIMPLEX",
+    certification_context: tuple[float, ...] | None = None,
+    mdn_alpha: tuple[float, ...] | None = None,
+    wx_support_directions: tuple[tuple[float, ...], ...] | None = None,
+    wx_support_values: tuple[float, ...] | None = None,
 ) -> Certificate:
     """Build a certificate with standard audit fields for testing."""
     return Certificate(
@@ -45,6 +49,10 @@ def _make_cert(
         episode_length=200,
         version="0.1.0",
         weight_region_type=weight_region_type,
+        certification_context=certification_context,
+        mdn_alpha=mdn_alpha,
+        wx_support_directions=wx_support_directions,
+        wx_support_values=wx_support_values,
     )
 
 
