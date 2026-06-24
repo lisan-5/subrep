@@ -27,6 +27,11 @@ def _make_cert(
     delta_n: tuple[float, float] = (0.5, 0.3),
     gate_type: str = "CDS",
     epsilon: float = 0.0,
+    weight_region_type: str = "FULL_SIMPLEX",
+    certification_context: tuple[float, ...] | None = None,
+    mdn_alpha: tuple[float, ...] | None = None,
+    wx_support_directions: tuple[tuple[float, ...], ...] | None = None,
+    wx_support_values: tuple[float, ...] | None = None,
 ) -> Certificate:
     """Build a certificate with standard audit fields for testing."""
     return Certificate(
@@ -43,6 +48,11 @@ def _make_cert(
         environment="MO-LunarLander-v2",
         episode_length=200,
         version="0.1.0",
+        weight_region_type=weight_region_type,
+        certification_context=certification_context,
+        mdn_alpha=mdn_alpha,
+        wx_support_directions=wx_support_directions,
+        wx_support_values=wx_support_values,
     )
 
 
@@ -117,7 +127,12 @@ class TestMDNContextualReuse:
     def test_spec_example_cds_passes(self, evaluator):
         """Task spec example: delta_r=0.15 >= h_Wx=0.14 → CDS passes."""
         cert = _make_cert(
-            skill_id="spec-cds-pass", delta_r=0.15, delta_n=(-0.2, 0.1)
+            skill_id="spec-cds-pass", delta_r=0.15, delta_n=(-0.2, 0.1),
+            weight_region_type="MDN_WX",
+            wx_support_directions=((1.0, 0.0), (0.0, 1.0)),
+            wx_support_values=(0.8, 0.4),
+            certification_context=(0.0, 0.0),
+            mdn_alpha=(1.0, 1.0),
         )
         result = evaluator.is_safe_mathematically(
             cert, [0.5, 0.5],
@@ -129,7 +144,12 @@ class TestMDNContextualReuse:
     def test_spec_example_cds_fails(self, evaluator):
         """Task spec example: delta_r=0.10 < h_Wx=0.14 → CDS fails."""
         cert = _make_cert(
-            skill_id="spec-cds-fail", delta_r=0.10, delta_n=(-0.2, 0.1)
+            skill_id="spec-cds-fail", delta_r=0.10, delta_n=(-0.2, 0.1),
+            weight_region_type="MDN_WX",
+            wx_support_directions=((1.0, 0.0), (0.0, 1.0)),
+            wx_support_values=(0.8, 0.4),
+            certification_context=(0.0, 0.0),
+            mdn_alpha=(1.0, 1.0),
         )
         result = evaluator.is_safe_mathematically(
             cert, [0.5, 0.5],
@@ -146,6 +166,11 @@ class TestMDNContextualReuse:
             delta_n=(-0.2, 0.1),
             gate_type="PDS",
             epsilon=0.05,
+            weight_region_type="MDN_WX",
+            wx_support_directions=((1.0, 0.0), (0.0, 1.0)),
+            wx_support_values=(0.8, 0.4),
+            certification_context=(0.0, 0.0),
+            mdn_alpha=(1.0, 1.0),
         )
         result = evaluator.is_safe_mathematically(
             cert, [0.5, 0.5],
@@ -156,17 +181,36 @@ class TestMDNContextualReuse:
 
     def test_rejects_when_cost_too_high(self, evaluator):
         """When h_Wx(-delta_n) greatly exceeds delta_r, reuse must fail."""
-        # delta_n=(-2.0, -1.0), so -delta_n=(2.0, 1.0).
-        # v1=[0.8, 0.2]: dot=1.8,  v2=[0.6, 0.4]: dot=1.6 → h_Wx=1.8
-        # delta_r=0.5 < 1.8 → FAIL.
         cert = _make_cert(
-            skill_id="bad-mdn", delta_r=0.5, delta_n=(-2.0, -1.0)
+            skill_id="bad-mdn", delta_r=0.5, delta_n=(-2.0, -1.0),
+            weight_region_type="MDN_WX",
+            wx_support_directions=((1.0, 0.0), (0.0, 1.0)),
+            wx_support_values=(0.8, 0.4),
+            certification_context=(0.0, 0.0),
+            mdn_alpha=(1.0, 1.0),
         )
         result = evaluator.is_safe_mathematically(
             cert, [0.5, 0.5],
             support_directions=self.SPEC_DIRECTIONS,
             support_values=self.SPEC_VALUES,
         )
+        assert result is False
+
+    def test_mdn_skill_unusable_without_geometry(self, evaluator):
+        """BLOCKER CASE: Contextual skill used without support context must fail reuse."""
+        cert = _make_cert(
+            skill_id="mdn-blocker",
+            delta_n=(-0.2, 0.1),
+            weight_region_type="MDN_WX",
+            # Add required audit fields for MDN_WX to pass constructor validation
+            certification_context=(1.0, 0.0, 0.0),
+            mdn_alpha=(1.0, 1.0),
+            wx_support_directions=((1.0, 0.0), (0.0, 1.0)),
+            wx_support_values=(0.8, 0.4),
+        )
+        # Calling is_safe_mathematically without support_directions/values.
+        # This used to return True (Bug), now must return False (Fixed).
+        result = evaluator.is_safe_mathematically(cert, [0.5, 0.5])
         assert result is False
 
 
@@ -181,7 +225,12 @@ class TestMotiveShiftCoverage:
     def _make_safe_cert(self):
         """A CDS cert known to be safe in the spec context (h_Wx=0.14)."""
         return _make_cert(
-            skill_id="shift-test", delta_r=0.20, delta_n=(-0.2, 0.1)
+            skill_id="shift-test", delta_r=0.20, delta_n=(-0.2, 0.1),
+            weight_region_type="MDN_WX",
+            wx_support_directions=((1.0, 0.0), (0.0, 1.0)),
+            wx_support_values=(0.8, 0.4),
+            certification_context=(0.0, 0.0),
+            mdn_alpha=(1.0, 1.0),
         )
 
     def test_small_perturbation(self, evaluator):
@@ -234,3 +283,84 @@ class TestEmpiricalValidation:
         """evaluate_performance must also validate the weight vector."""
         with pytest.raises(ValueError):
             evaluator.evaluate_performance(cds_full_simplex_cert, [0.3, 0.3])
+
+
+# ── Runtime Library Integration ──────────────────────────────────────────────
+
+from library.skill_library import SkillLibrary
+
+class TestLibraryQueryAdmissible:
+    """Validate that zero-shot reuse flows correctly through the runtime library."""
+
+    DIRECTIONS = [[1, 0], [0, 1]]
+    VALUES = [0.8, 0.4]
+
+    @pytest.fixture
+    def populated_library(self, cds_full_simplex_cert) -> SkillLibrary:
+        """Build a library with both global and contextual skills."""
+        library = SkillLibrary()
+
+        # Add a globally certified FULL_SIMPLEX skill
+        library.add_skill(
+            skill_id=cds_full_simplex_cert.skill_id,
+            certificate=cds_full_simplex_cert,
+            policy=lambda obs: 0,
+            weight_region_type=FULL_SIMPLEX,
+        )
+
+        # Add an MDN_WX certified skill (matching the spec example: h_Wx=0.14)
+        mdn_cert = _make_cert(
+            skill_id="mdn-spec-example",
+            delta_r=0.15,
+            delta_n=(-0.2, 0.1),
+            weight_region_type=MDN_WX,
+            certification_context=(1.0, 0.0, 0.0),
+            mdn_alpha=(2.0, 1.0),
+            wx_support_directions=tuple(tuple(d) for d in self.DIRECTIONS),
+            wx_support_values=tuple(self.VALUES),
+        )
+        library.add_skill(
+            skill_id=mdn_cert.skill_id,
+            certificate=mdn_cert,
+            policy=lambda obs: 0,
+            weight_region_type=mdn_cert.weight_region_type,
+            certification_context=mdn_cert.certification_context,
+            mdn_alpha=mdn_cert.mdn_alpha,
+            wx_support_directions=mdn_cert.wx_support_directions,
+            wx_support_values=mdn_cert.wx_support_values,
+        )
+
+        return library
+
+    def test_library_returns_full_simplex_always(self, evaluator, populated_library):
+        """FULL_SIMPLEX skills should be admissible regardless of MDN context."""
+        assert evaluator.is_reusable_via_library(
+            populated_library,
+            "cds-global",
+            current_weight=[0.9, 0.1],
+            support_directions=self.DIRECTIONS,
+            support_values=self.VALUES,
+        ) is True
+
+    def test_library_returns_mdn_when_feasible(self, evaluator, populated_library):
+        """MDN_WX skills should be admissible when the geometry supports it."""
+        assert evaluator.is_reusable_via_library(
+            populated_library,
+            "mdn-spec-example",
+            current_weight=[0.5, 0.5],
+            support_directions=self.DIRECTIONS,
+            support_values=self.VALUES,
+        ) is True
+
+    def test_library_excludes_mdn_when_cost_too_high(self, evaluator, populated_library):
+        """MDN_WX skills must be excluded if the geometry implies the cost exceeds delta_r."""
+        # SV=[1.0, 0.8] -> vertices=[1.0, 0.0] and [0.2, 0.8]
+        # v1 dot [0.2, -0.1] = 0.2 > 0.15 (delta_r). Fails.
+        result = evaluator.is_reusable_via_library(
+            populated_library,
+            "mdn-spec-example",
+            current_weight=[0.5, 0.5],
+            support_directions=self.DIRECTIONS,
+            support_values=[1.0, 0.8],
+        )
+        assert result is False

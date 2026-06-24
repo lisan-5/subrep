@@ -82,3 +82,10 @@ This protocol is **intentionally independent** of `SkillLibrary` and its runtime
 - Clear responsibility boundaries between certification and selection.
 - The evaluator can be used by any downstream consumer (tests, demos, future selectors).
 - No risk of circular dependencies with the library's admission logic.
+
+### 9. Runtime Integration (SkillLibrary)
+
+For production runtime selection, reuse checks are performed through `SkillLibrary.query_admissible()`. The `ZeroShotEvaluator.is_safe_mathematically()` and `is_reusable_via_library()` methods now delegate to this unified library path to ensure 100% mathematical consistency across all architectural components.
+
+- **FULL_SIMPLEX** certificates allow global reuse (no support geometry required).
+- **MDN_WX** certificates strictly require valid `support_directions` and `support_values` at runtime; otherwise, reuse is blocked to maintain safety.
