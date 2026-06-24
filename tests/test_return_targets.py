@@ -47,6 +47,23 @@ def test_doubly_robust_return_equals_actual_return_on_policy():
     assert np.allclose(target, discounted_motive_return(motives, gamma=1.0))
 
 
+def test_doubly_robust_return_promotes_single_option_trajectory():
+    motives = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    q_model = np.array([0.5, 0.5], dtype=np.float32)
+
+    target = doubly_robust_return(
+        motives,
+        behavior_probability=0.5,
+        target_probability=0.5,
+        q_model_estimate=q_model,
+        gamma=1.0,
+    )
+
+    expected = discounted_motive_return(motives[None, :, :], gamma=1.0)
+    assert target.shape == (1, 2)
+    assert np.allclose(target, expected)
+
+
 def test_doubly_robust_return_keeps_perfect_baseline_fixed():
     motives = np.array([[[1.0, 2.0], [3.0, 4.0]]], dtype=np.float32)
     q_model = discounted_motive_return(motives, gamma=1.0)
@@ -94,3 +111,17 @@ def test_doubly_robust_return_rejects_nonconstant_step_probabilities():
         assert "option-level" in str(exc)
     else:
         raise AssertionError("Expected nonconstant step probabilities to be rejected")
+
+
+def test_doubly_robust_return_rejects_invalid_motive_shape():
+    try:
+        doubly_robust_return(
+            np.array([1.0, 2.0], dtype=np.float32),
+            behavior_probability=1.0,
+            target_probability=1.0,
+            q_model_estimate=np.array([[0.0, 0.0]], dtype=np.float32),
+        )
+    except ValueError as exc:
+        assert "Doubly robust motives" in str(exc)
+    else:
+        raise AssertionError("Expected invalid DR motive shape to be rejected")

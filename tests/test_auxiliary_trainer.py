@@ -218,6 +218,36 @@ def test_probability_aware_auxiliary_training_path_runs(tmp_path: Path):
     assert result["best_val_loss"] >= 0.0
 
 
+def test_train_auxiliary_from_records_exposes_doubly_robust(tmp_path: Path):
+    records = []
+    for index in range(20):
+        records.append(
+            build_auxiliary_record(
+                context=((0.1,) * 8) if index % 2 == 0 else ((0.9,) * 8),
+                skill_id=1 if index % 2 == 0 else 2,
+                payoff=1.7 if index % 2 == 0 else 1.1,
+                motives=(0.8, 0.4) if index % 2 == 0 else (0.3, 0.7),
+                baseline_stats=_baseline_stats(),
+                motive_trajectory=[[(1.0, 0.0), (0.0, 1.0)]],
+                record_behavior_probability=0.5,
+                all_candidate_delta_r=(0.4, 0.2),
+                all_candidate_delta_n=((0.8, 0.1), (0.1, 0.8)),
+                selected_candidate_index=0,
+            )
+        )
+
+    result = train_auxiliary_from_records(
+        records,
+        checkpoint_path=str(tmp_path / "mdn_auxiliary_dr_best.pth"),
+        seed=0,
+        device="cpu",
+        use_doubly_robust=True,
+    )
+
+    assert Path(result["checkpoint_path"]).exists()
+    assert result["best_val_loss"] >= 0.0
+
+
 def test_probability_aware_path_recomputes_softmax_target_probability_from_candidate_scores():
     model = MotiveDecompositionNetwork(input_dim=8, num_skills=4, num_objectives=2)
     trainer = MDNAuxiliaryTrainer(

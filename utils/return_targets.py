@@ -98,8 +98,11 @@ def doubly_robust_return(
             "Doubly robust return requires behavior_probability, target_probability, and q_model_estimate"
         )
 
-    direct_target = discounted_motive_return(motives, gamma=gamma)
+    motives_array = _coerce_option_motives(motives)
+    direct_target = discounted_motive_return(motives_array, gamma=gamma)
     q_model_estimate = np.asarray(q_model_estimate, dtype=np.float32)
+    if q_model_estimate.ndim == 1 and direct_target.shape[0] == 1:
+        q_model_estimate = q_model_estimate.reshape(1, -1)
     if q_model_estimate.shape != direct_target.shape:
         raise ValueError(
             f"q_model_estimate shape {q_model_estimate.shape} must match direct target shape {direct_target.shape}"
@@ -107,7 +110,6 @@ def doubly_robust_return(
     if not np.all(np.isfinite(q_model_estimate)):
         raise ValueError("q_model_estimate must contain only finite values")
 
-    motives_array = np.asarray(motives, dtype=np.float32)
     batch_size = motives_array.shape[0]
     time_steps = motives_array.shape[1]
     behavior = _coerce_option_probability(
@@ -133,6 +135,22 @@ def doubly_robust_return(
         rho = np.minimum(rho, clip_value)
 
     return (q_model_estimate + rho[:, None] * (direct_target - q_model_estimate)).astype(np.float32)
+
+
+def _coerce_option_motives(motives: np.ndarray) -> np.ndarray:
+    motives_array = np.asarray(motives, dtype=np.float32)
+    if motives_array.ndim == 2:
+        motives_array = motives_array[None, :, :]
+    elif motives_array.ndim != 3:
+        raise ValueError(
+            f"Doubly robust motives must have shape (T, M) or (N, T, M), got {motives_array.shape}"
+        )
+
+    if motives_array.shape[0] <= 0 or motives_array.shape[1] <= 0 or motives_array.shape[2] <= 0:
+        raise ValueError(f"Doubly robust motives must be non-empty, got {motives_array.shape}")
+    if not np.all(np.isfinite(motives_array)):
+        raise ValueError("Doubly robust motives must contain only finite values")
+    return motives_array
 
 
 def _coerce_option_probability(

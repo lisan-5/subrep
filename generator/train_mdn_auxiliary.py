@@ -19,6 +19,7 @@ def train_auxiliary_from_records(
     seed: int = 0,
     device: Optional[str] = None,
     use_ips: bool = False,
+    use_doubly_robust: bool = False,
 ) -> dict[str, object]:
     records = list(records)
     if not records:
@@ -39,10 +40,11 @@ def train_auxiliary_from_records(
             checkpoint_path=checkpoint_path,
             random_seed=seed,
             use_ips=use_ips,
+            use_doubly_robust=use_doubly_robust,
         ),
         device=device,
     )
 
-    if use_ips:
+    if use_ips or use_doubly_robust:
         return trainer.train_probability_aware_records(records)
     return trainer.train_records(records)
