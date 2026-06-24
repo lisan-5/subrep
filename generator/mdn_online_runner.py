@@ -13,6 +13,12 @@ import numpy as np
 
 from certification.certificate_schema import Certificate
 from generator.mdn import MotiveDecompositionNetwork
+from generator.mdn_auxiliary_replay import (
+    AuxiliaryReplayBuffer,
+    AuxiliaryReplayEntry,
+    replay_entry_to_auxiliary_records,
+    replay_entry_to_selected_auxiliary_record,
+)
 from generator.mdn_auxiliary_trainer import AuxiliaryTrainingRecord, MDNAuxiliaryTrainer
 from generator.mdn_runtime_selector import MDNRuntimeSelector
 from generator.mdn_trainer import MDNTrainer
@@ -53,6 +59,8 @@ class MDNOnlineRunner:
         store_path: Optional[str] = None,
         save_every_n_steps: int = 10,
         auxiliary_trainer: Optional[MDNAuxiliaryTrainer] = None,
+        auxiliary_replay_buffer: Optional[AuxiliaryReplayBuffer] = None,
+        auxiliary_replay_train_every_n_steps: Optional[int] = None,
         device: Optional[str] = None,
         certificate_store: Optional[Any] = None,
         certificate_metadata: Optional[dict[str, Any]] = None,
@@ -60,11 +68,15 @@ class MDNOnlineRunner:
     ) -> None:
         if save_every_n_steps <= 0:
             raise ValueError("save_every_n_steps must be positive")
+        if auxiliary_replay_train_every_n_steps is not None and auxiliary_replay_train_every_n_steps <= 0:
+            raise ValueError("auxiliary_replay_train_every_n_steps must be positive when provided")
 
         self.model = model
         self.certification_pipeline = certification_pipeline
         self.policy_trainer = policy_trainer
         self.auxiliary_trainer = auxiliary_trainer
+        self.auxiliary_replay_buffer = auxiliary_replay_buffer
+        self.auxiliary_replay_train_every_n_steps = auxiliary_replay_train_every_n_steps
         self.baseline_stats = dict(baseline_stats)
         self.checkpoint_path = checkpoint_path
         self.store_path = store_path or certification_pipeline.config.store_path
@@ -153,8 +165,20 @@ class MDNOnlineRunner:
         )
         policy_metrics = self.policy_trainer.training_step(record)
 
+        if self.auxiliary_replay_buffer is not None:
+            self.auxiliary_replay_buffer.append(
+                self._build_aux_replay_entry(
+                    context=context,
+                    candidates=list(selection.candidate_skills),
+                    selected_skill_id=selection.selected_skill_id,
+                    behavior_probability=selection.behavior_probability,
+                    actual_payoff=float(outcome["actual_payoff"]),
+                    actual_motives=tuple(float(v) for v in outcome["actual_motives"]),
+                )
+            )
+
         auxiliary_metrics: dict[str, float] | None = None
-        if self.auxiliary_trainer is not None:
+        if self.auxiliary_trainer is not None and self.auxiliary_replay_train_every_n_steps is None:
             aux_record = self._build_aux_record(
                 context=context,
                 candidate_skills=selection.candidate_skills,
@@ -167,6 +191,9 @@ class MDNOnlineRunner:
         self.certification_pipeline.observe_certified_weight(context, selection.weights_used)
 
         self._step_count += 1
+        replay_metrics = self._maybe_train_auxiliary_from_replay()
+        if replay_metrics is not None:
+            auxiliary_metrics = replay_metrics
         self._maybe_save()
         return StepResult(
             selected_skill_id=selection.selected_skill_id,
@@ -322,6 +349,64 @@ class MDNOnlineRunner:
             selected_candidate_index=selected_idx,
         )
 
+    def _build_aux_replay_entry(
+        self,
+        *,
+        context: np.ndarray,
+        candidates: list[CandidateSkillRecord],
+        selected_skill_id: str,
+        behavior_probability: float,
+        actual_payoff: float,
+        actual_motives: tuple[float, ...],
+    ) -> AuxiliaryReplayEntry:
+        selected_idx = next(
+            (i for i, candidate in enumerate(candidates) if candidate.skill_id == selected_skill_id),
+            None,
+        )
+        if selected_idx is None:
+            raise ValueError(f"selected_skill_id {selected_skill_id!r} not found in candidates")
+        certified_candidate_indices = tuple(
+            index for index, candidate in enumerate(candidates) if candidate.is_certified
+        )
+        if selected_idx not in certified_candidate_indices:
+            raise ValueError(f"selected_skill_id {selected_skill_id!r} is not certified")
+        return AuxiliaryReplayEntry(
+            context=tuple(float(v) for v in context),
+            selected_skill_id=selected_skill_id,
+            selected_candidate_index=selected_idx,
+            behavior_probability=float(behavior_probability),
+            actual_payoff=float(actual_payoff),
+            actual_motives=tuple(float(v) for v in actual_motives),
+            candidate_skill_ids=tuple(candidate.skill_id for candidate in candidates),
+            candidate_accept_labels=tuple(float(candidate.is_certified) for candidate in candidates),
+            candidate_delta_r=tuple(float(candidate.delta_r) for candidate in candidates),
+            candidate_delta_n=tuple(tuple(float(v) for v in candidate.delta_n) for candidate in candidates),
+            certified_candidate_indices=certified_candidate_indices,
+        )
+
+    def _maybe_train_auxiliary_from_replay(self) -> dict[str, float] | None:
+        if self.auxiliary_trainer is None:
+            return None
+        if self.auxiliary_replay_buffer is None:
+            return None
+        if self.auxiliary_replay_train_every_n_steps is None:
+            return None
+        if self._step_count % self.auxiliary_replay_train_every_n_steps != 0:
+            return None
+
+        entries = self.auxiliary_replay_buffer.sample_all()
+        if not entries:
+            return None
+        if len(entries) < 2:
+            return None
+
+        records: list[AuxiliaryTrainingRecord] = []
+        for entry in entries:
+            records.extend(replay_entry_to_auxiliary_records(entry, num_skills=self.model.num_skills))
+        if self.auxiliary_trainer.config.use_ips or self.auxiliary_trainer.config.use_doubly_robust:
+            return self.auxiliary_trainer.train_probability_aware_records(records)
+        return self.auxiliary_trainer.train_records(records)
+
     def save(self) -> None:
         """Persist policy checkpoint and weight store."""
         self.policy_trainer.save_checkpoint(self.checkpoint_path)
@@ -344,6 +429,8 @@ class MDNOnlineRunner:
         store_path: Optional[str] = None,
         save_every_n_steps: int = 10,
         auxiliary_trainer: Optional[MDNAuxiliaryTrainer] = None,
+        auxiliary_replay_buffer: Optional[AuxiliaryReplayBuffer] = None,
+        auxiliary_replay_train_every_n_steps: Optional[int] = None,
         device: Optional[str] = None,
         certificate_store: Optional[Any] = None,
         certificate_metadata: Optional[dict[str, Any]] = None,
@@ -359,6 +446,8 @@ class MDNOnlineRunner:
             store_path=store_path,
             save_every_n_steps=save_every_n_steps,
             auxiliary_trainer=auxiliary_trainer,
+            auxiliary_replay_buffer=auxiliary_replay_buffer,
+            auxiliary_replay_train_every_n_steps=auxiliary_replay_train_every_n_steps,
             device=device,
             certificate_store=certificate_store,
             certificate_metadata=certificate_metadata,

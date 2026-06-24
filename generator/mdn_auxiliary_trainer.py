@@ -17,7 +17,7 @@ from certification.cds_test import CDSGate
 from certification.pds_test import PDSGate
 from generator.mdn import MotiveDecompositionNetwork
 from utils.mdn_selection import alpha_to_mean_weights
-from utils.return_targets import discounted_motive_return, doubly_robust_return, ips_weighted_return
+from utils.return_targets import discounted_motive_return, doubly_robust_return
 from utils.weight_set_store import WeightSet
 
 
@@ -34,6 +34,7 @@ class AuxiliaryTrainingRecord:
     skill_id: int
     accept_label: float
     q_target: tuple[float, ...]
+    has_q_target: bool = True
     behavior_probability: float | None = None
     motive_trajectory: tuple[tuple[float, ...], ...] | None = None
     # Delta info for ALL certified candidates at data-collection time.
@@ -79,6 +80,7 @@ class MDNAuxiliaryTrainerConfig:
     random_seed: int = 0
     use_ips: bool = False
     ips_clip: float = 10.0
+    use_doubly_robust: bool = False
 
 
 class MDNAuxiliaryTrainer:
@@ -87,6 +89,8 @@ class MDNAuxiliaryTrainer:
     def __init__(self, model: MotiveDecompositionNetwork, config: Optional[MDNAuxiliaryTrainerConfig] = None, device: Optional[str] = None) -> None:
         self.model = model
         self.config = config or MDNAuxiliaryTrainerConfig()
+        if self.config.use_ips and self.config.use_doubly_robust:
+            raise ValueError("use_ips and use_doubly_robust are mutually exclusive auxiliary estimators")
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.model.to(self.device)
         self.gate_loss_fn = BCEWithLogitsLoss()
@@ -115,6 +119,16 @@ class MDNAuxiliaryTrainer:
         q_loss = self.q_loss_fn(q_hat, q_target)
         total_loss = gate_loss + self.config.lambda_q * float(q_loss_weight) * q_loss
         return total_loss, gate_loss, q_loss
+
+    def _compute_gate_only_losses(
+        self,
+        gate_logits: torch.Tensor,
+        q_hat: torch.Tensor,
+        accept_label: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        gate_loss = self.gate_loss_fn(gate_logits, accept_label)
+        q_loss = torch.zeros((), dtype=q_hat.dtype, device=q_hat.device)
+        return gate_loss, gate_loss, q_loss
 
     def _compute_softmax_target_probability(
         self,
@@ -218,24 +232,45 @@ class MDNAuxiliaryTrainer:
 
             gate_logits, q_hat = self.model.forward_auxiliary(ctx, sid)
 
-            alpha, _ = self.model.forward_inference(ctx)
-            weights = alpha_to_mean_weights(alpha.detach().squeeze(0).cpu().numpy())
-            target_prob = self._compute_softmax_target_probability(
-                record.selected_candidate_index,
-                record.candidate_delta_r,
-                record.candidate_delta_n,
-                weights,
-            )
-            raw_weight = target_prob / max(float(record.behavior_probability), 1e-8)
-            ips_weight = min(raw_weight, float(self.config.ips_clip))
+            if not record.has_q_target:
+                batch_loss, gate_loss, q_loss = self._compute_gate_only_losses(
+                    gate_logits,
+                    q_hat,
+                    label,
+                )
+            else:
+                alpha, _ = self.model.forward_inference(ctx)
+                weights = alpha_to_mean_weights(alpha.detach().squeeze(0).cpu().numpy())
+                target_prob = self._compute_softmax_target_probability(
+                    record.selected_candidate_index,
+                    record.candidate_delta_r,
+                    record.candidate_delta_n,
+                    weights,
+                )
+                raw_weight = target_prob / max(float(record.behavior_probability), 1e-8)
+                ips_weight = min(raw_weight, float(self.config.ips_clip))
 
-            batch_loss, gate_loss, q_loss = self._compute_losses(
-                gate_logits,
-                q_hat,
-                label,
-                q_tgt,
-                q_loss_weight=ips_weight,
-            )
+                if self.config.use_doubly_robust:
+                    baseline = q_hat.detach()
+                    dr_target = baseline + ips_weight * (q_tgt - baseline)
+                    batch_loss, gate_loss, q_loss = self._compute_losses(
+                        gate_logits,
+                        q_hat,
+                        label,
+                        dr_target,
+                        q_loss_weight=1.0,
+                    )
+                else:
+                    # IPS is a loss weight, not target scaling. Scaling q_tgt by
+                    # rho would train q_hat toward rho * return and can inflate
+                    # values; weighting the loss estimates target-policy risk.
+                    batch_loss, gate_loss, q_loss = self._compute_losses(
+                        gate_logits,
+                        q_hat,
+                        label,
+                        q_tgt,
+                        q_loss_weight=ips_weight,
+                    )
 
             if training:
                 batch_loss.backward()
@@ -259,15 +294,15 @@ class MDNAuxiliaryTrainer:
     def online_step(self, record: AuxiliaryTrainingRecord) -> dict[str, float]:
         """Run one online gradient step on a single auxiliary training record.
         """
-        if self.config.use_ips:
+        if self.config.use_ips or self.config.use_doubly_robust:
             if record.behavior_probability is None:
-                raise ValueError("online_step with use_ips=True requires behavior_probability")
+                raise ValueError("probability-aware online_step requires behavior_probability")
             if record.candidate_delta_r is None:
-                raise ValueError("online_step with use_ips=True requires candidate_delta_r")
+                raise ValueError("probability-aware online_step requires candidate_delta_r")
             if record.candidate_delta_n is None:
-                raise ValueError("online_step with use_ips=True requires candidate_delta_n")
+                raise ValueError("probability-aware online_step requires candidate_delta_n")
             if record.selected_candidate_index is None:
-                raise ValueError("online_step with use_ips=True requires selected_candidate_index")
+                raise ValueError("probability-aware online_step requires selected_candidate_index")
             return self._run_probability_aware_epoch([record], training=True)
 
         self.model.train()
@@ -290,9 +325,9 @@ class MDNAuxiliaryTrainer:
         }
 
     def train_records(self, records: Iterable[AuxiliaryTrainingRecord]) -> dict[str, Any]:
-        if self.config.use_ips:
+        if self.config.use_ips or self.config.use_doubly_robust:
             raise ValueError(
-                "use_ips=True requires train_probability_aware_records(...), not train_records(...)"
+                "probability-aware auxiliary estimators require train_probability_aware_records(...), not train_records(...)"
             )
         dataset = AuxiliaryDataset(records)
         val_size = max(1, int(round(len(dataset) * self.config.validation_split)))
@@ -490,6 +525,7 @@ def build_auxiliary_record(
         skill_id=int(skill_id),
         accept_label=float(bool(accept_label)),
         q_target=tuple(float(v) for v in q_target),
+        has_q_target=True,
         behavior_probability=stored_behavior_probability,
         motive_trajectory=None if motive_trajectory is None else tuple(
             tuple(float(value) for value in np.asarray(step, dtype=np.float32).reshape(-1))
