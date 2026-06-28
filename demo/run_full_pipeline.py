@@ -26,6 +26,10 @@ from certification.metta_storage import CertificateStore
 from library.skill_library import SkillLibrary
 from library.skill_selector import SkillSelector
 from generator.skill_generator import SkillGenerator
+from utils.admission_report import AdmissionReport, AdmissionRecord
+from utils.mdn_stub import load_mdn_or_stub
+from generator.mdn_runtime_selector import MDNRuntimeSelector
+from utils.mdn_contracts import CandidateSkillRecord
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 NUM_EPISODES        = 10
@@ -37,6 +41,9 @@ CERT_FILE           = "data/certificates.metta"
 LIBRARY_FILE        = "data/library.json"
 ENV_NAME            = "MO-LunarLander-v3"
 VERSION             = "0.1.0"
+MDN_CHECKPOINT_PATH = "models/mdn.pt"  # Will fallback to stub if not found
+REPORT_JSON_PATH    = "demo/artifacts/admission_report.json"
+REPORT_MD_PATH      = "demo/artifacts/admission_report.md"
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -123,6 +130,9 @@ def run_pipeline() -> dict:
 
     # Per-episode records for the upcoming admission report
     episode_records: list[dict] = []
+
+    # Initialize admission report collector
+    report = AdmissionReport()
 
     for ep in range(1, NUM_EPISODES + 1):
         skill_id = f"skill_{ep:03d}"
@@ -220,7 +230,7 @@ def run_pipeline() -> dict:
             result_str = "REJECTED ❌"
 
         # Record episode data for admission report
-        episode_records.append({
+        episode_record_dict = {
             "skill_id": skill_id,
             "admitted": admitted_flag,
             "gate_type": active_gate if admitted_flag else None,
@@ -228,7 +238,9 @@ def run_pipeline() -> dict:
             "delta_n": (float(delta_n[0]), float(delta_n[1])),
             "margin": float(margin),
             "failure_reason": failure_reason,
-        })
+        }
+        episode_records.append(episode_record_dict)
+        report.add_from_dict(episode_record_dict)
 
         print(
             f"{ep:>4}  {searches:>6d}  {payoff:>9.3f}  {delta_r:>8.3f}  {float(np.min(delta_n)):>8.3f}"
@@ -249,6 +261,69 @@ def run_pipeline() -> dict:
     library.save(LIBRARY_FILE)
     print(f"[Save] certificates → {CERT_FILE}")
     print(f"[Save] library      → {LIBRARY_FILE}")
+
+    # ── 4.5. Generate Admission Report ─────────────────────────────────────────
+    print("\n[Report] Generating admission report...")
+    os.makedirs("demo/artifacts", exist_ok=True)
+    report.save_json(REPORT_JSON_PATH)
+    report.save_markdown(REPORT_MD_PATH)
+    print(f"[Report] JSON report → {REPORT_JSON_PATH}")
+    print(f"[Report] MD report   → {REPORT_MD_PATH}")
+
+    # ── 5. Phase 5 — MDN Selection Demo ────────────────────────────────────────
+    if library.count() > 0:
+        print("\n" + "=" * 60)
+        print("  Phase 5 — MDN-Based Skill Selection Demo")
+        print("=" * 60)
+        print("\n[MDN] Loading MDN (or stub if checkpoint unavailable)...")
+        
+        # Load trained MDN or fallback to stub
+        mdn_model = load_mdn_or_stub(
+            checkpoint_path=MDN_CHECKPOINT_PATH,
+            input_dim=8,
+            num_objectives=2,
+        )
+        
+        # Create MDN runtime selector
+        mdn_selector = MDNRuntimeSelector(mdn_model)
+        
+        # Build candidate skills from library
+        admitted_skills = library.get_admitted_skills()
+        candidates = []
+        for entry in admitted_skills:
+            candidates.append(CandidateSkillRecord(
+                skill_id=entry.skill_id,
+                delta_r=entry.delta_r,
+                delta_n=tuple(entry.delta_n),
+                is_certified=True,
+                gate_type=entry.gate_type,
+                admission_margin=entry.certificate.admission_margin,
+                epsilon=entry.certificate.epsilon,
+                baseline_id=entry.certificate.baseline_id,
+            ))
+        
+        print(f"[MDN] Built {len(candidates)} certified candidates from library")
+        print(f"[MDN] Running selection on 3 evaluation observations...\n")
+        
+        # Run MDN selection on 3 different observations
+        eval_observations = [
+            np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], dtype=np.float32),
+            np.array([-0.1, 0.5, -0.2, 0.3, 0.1, -0.3, 0.4, 0.2], dtype=np.float32),
+            np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        ]
+        
+        for idx, obs in enumerate(eval_observations, 1):
+            try:
+                result = mdn_selector.select(obs, candidates)
+                print(f"  Obs {idx}: Selected skill '{result.selected_skill_id}' "
+                      f"(score={result.selected_score:.4f}, "
+                      f"alpha=[{result.alpha[0]:.2f}, {result.alpha[1]:.2f}])")
+            except Exception as e:
+                print(f"  Obs {idx}: Selection failed - {e}")
+        
+        print("\n[MDN] Selection demo complete")
+    else:
+        print("\n[MDN] Skipping MDN selection demo (library is empty)")
 
     # ── 5. Summary ─────────────────────────────────────────────────────────────
     total = admitted + rejected
