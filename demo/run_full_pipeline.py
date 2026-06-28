@@ -118,6 +118,11 @@ def run_pipeline() -> dict:
     admitted = 0
     rejected = 0
     first_admitted_ep = None
+    cds_pass_count = 0
+    pds_pass_count = 0
+
+    # Per-episode records for the upcoming admission report
+    episode_records: list[dict] = []
 
     for ep in range(1, NUM_EPISODES + 1):
         skill_id = f"skill_{ep:03d}"
@@ -155,10 +160,19 @@ def run_pipeline() -> dict:
         delta_r, delta_n = calculator.compute_improvements(payoff, motives)
         admitted_cds = gate.admit(delta_r, delta_n)
         admitted_pds = pds_gate.admit(delta_r, delta_n)
-        
+
         admitted_flag = admitted_cds or admitted_pds
         active_gate = "CDS" if admitted_cds else "PDS"
         margin = gate.get_admission_margin(delta_r, delta_n) if admitted_cds else pds_gate.get_admission_margin(delta_r, delta_n)
+
+        # Determine human-readable failure reason for rejected skills
+        failure_reason: str | None = None
+        if not admitted_flag:
+            failure_reason = (
+                f"delta_r + min(delta_n) + epsilon < 0 "
+                f"(got {delta_r:.4f} + {float(np.min(delta_n)):.4f} = "
+                f"{delta_r + float(np.min(delta_n)):.4f})"
+            )
 
         if admitted_flag:
             # STORE — save to cert_store (MeTTa) then to library
@@ -171,22 +185,61 @@ def run_pipeline() -> dict:
                 gate_type=active_gate,
                 epsilon=0.1 if active_gate == "PDS" else 0.0,
             )
-            cert_store.add(cert)
-            # Attach a fresh random policy as placeholder
-            random_policy = lambda o: env.env.action_space.sample()
-            library.add_skill(skill_id, cert, random_policy)
-            admitted += 1
-            if first_admitted_ep is None:
-                first_admitted_ep = ep
-            result_str = "ADMITTED ✅"
+            store_added = cert_store.add(cert)
+            lib_added = False
+            if store_added:
+                # Attach a fresh random policy as placeholder
+                random_policy = lambda o: env.env.action_space.sample()
+                lib_added = library.add_skill(skill_id, cert, random_policy)
+
+                if not lib_added:
+                    # ROLLBACK: library rejected — remove from cert_store to stay in sync
+                    cert_store.remove_skill(skill_id)
+                    failure_reason = "library.add_skill() rejected after math re-verification"
+                    admitted_flag = False
+                    rejected += 1
+                    result_str = "REJECTED ❌"
+                else:
+                    # Successfully admitted to both stores
+                    if admitted_cds:
+                        cds_pass_count += 1
+                    else:
+                        pds_pass_count += 1
+                    admitted += 1
+                    if first_admitted_ep is None:
+                        first_admitted_ep = ep
+                    result_str = "ADMITTED ✅"
+            else:
+                # Duplicate skill_id — treat as rejected
+                failure_reason = "duplicate skill_id already in cert_store"
+                admitted_flag = False
+                rejected += 1
+                result_str = "REJECTED ❌"
         else:
             rejected += 1
             result_str = "REJECTED ❌"
+
+        # Record episode data for admission report
+        episode_records.append({
+            "skill_id": skill_id,
+            "admitted": admitted_flag,
+            "gate_type": active_gate if admitted_flag else None,
+            "delta_r": float(delta_r),
+            "delta_n": (float(delta_n[0]), float(delta_n[1])),
+            "margin": float(margin),
+            "failure_reason": failure_reason,
+        })
 
         print(
             f"{ep:>4}  {searches:>6d}  {payoff:>9.3f}  {delta_r:>8.3f}  {float(np.min(delta_n)):>8.3f}"
             f"  {'Y' if admitted_cds else 'N':>3}  {'Y' if admitted_pds else 'N':>3}"
             f"  {result_str:>12}  {library.count():>4}"
+        )
+
+        # Invariant assertion: cert_store and library must always be in sync
+        assert cert_store.count() == library.count(), (
+            f"Ep {ep}: SYNC ERROR — cert_store.count()={cert_store.count()} != "
+            f"library.count()={library.count()}"
         )
 
     # ── 4. Persistence ─────────────────────────────────────────────────────────
@@ -208,6 +261,8 @@ def run_pipeline() -> dict:
     print(f"  Total Episodes    : {total}")
     print(f"  Admitted          : {admitted} ({admission_rate:.1f}%)")
     print(f"  Rejected          : {rejected} ({rejection_rate:.1f}%)")
+    print(f"  CDS Admissions    : {cds_pass_count}")
+    print(f"  PDS Admissions    : {pds_pass_count}")
     print(f"  Library Size      : {library.count()}")
     if first_admitted_ep:
         print(f"  First Admission   : Episode {first_admitted_ep}")
@@ -220,8 +275,11 @@ def run_pipeline() -> dict:
         "rejected": rejected,
         "admission_rate": admission_rate,
         "rejection_rate": rejection_rate,
+        "cds_pass_count": cds_pass_count,
+        "pds_pass_count": pds_pass_count,
         "first_admitted_ep": first_admitted_ep,
         "library_size": library.count(),
+        "episode_records": episode_records,
     }
 
 
