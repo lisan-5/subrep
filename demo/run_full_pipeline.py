@@ -102,10 +102,18 @@ def run_pipeline() -> dict:
     pds_gate = PDSGate(epsilon=0.1)  # Allow a small mathematical trade-off budget
 
     # ── 1.5 Load Skill Generator (Pre-Filter) ─────────────────────────────────
-    print("[Init] Loading trained SkillGenerator from models/generator.pt...")
-    model = SkillGenerator(input_dim=8, hidden_dim=64, motive_dim=2)
-    model.load("models/generator.pt")
-    model.eval()  # Set to inference mode
+    generator_available = False
+    model = None
+    try:
+        print("[Init] Loading trained SkillGenerator from models/generator.pt...")
+        model = SkillGenerator(input_dim=8, hidden_dim=64, motive_dim=2)
+        model.load("models/generator.pt")
+        model.eval()  # Set to inference mode
+        generator_available = True
+        print("[Init] SkillGenerator loaded successfully")
+    except FileNotFoundError:
+        print("[Init] Warning: models/generator.pt not found. Using random search fallback.")
+        print("[Init] Train generator with: python -m generator.train_generator")
 
 
     # ── 2. Stores ──────────────────────────────────────────────────────────────
@@ -146,15 +154,20 @@ def run_pipeline() -> dict:
         while not found_promising_state and searches < max_search:
             searches += 1
             obs, _ = env.reset()
-            # Predict outcome using the SkillGenerator
-            with torch.no_grad():
-                pred_payoff, pred_motives = model(torch.tensor(obs, dtype=torch.float32))
-                pred_dr, pred_dn = calculator.compute_improvements(
-                    pred_payoff.item(), pred_motives.numpy()
-                )
-                # Does the model THINK it will pass either gate?
-                if gate.admit(pred_dr, pred_dn) or pds_gate.admit(pred_dr, pred_dn):
-                    found_promising_state = True
+            
+            if generator_available and model is not None:
+                # Predict outcome using the SkillGenerator
+                with torch.no_grad():
+                    pred_payoff, pred_motives = model(torch.tensor(obs, dtype=torch.float32))
+                    pred_dr, pred_dn = calculator.compute_improvements(
+                        pred_payoff.item(), pred_motives.numpy()
+                    )
+                    # Does the model THINK it will pass either gate?
+                    if gate.admit(pred_dr, pred_dn) or pds_gate.admit(pred_dr, pred_dn):
+                        found_promising_state = True
+            else:
+                # Fallback: accept any state (random search)
+                found_promising_state = True
 
         # EXECUTE — run one episode
         # Use the trained RL Policy provided by the team lead.
