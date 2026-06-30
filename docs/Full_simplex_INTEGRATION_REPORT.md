@@ -402,3 +402,54 @@ Task 06 completes the **quarter-plan validation story**:
 3. **Bridges current state to future phases**: Full-simplex certification (current) → Context-aware MDN certification (future)
 4. **Provides research-grade analytics**: Report transforms demo into measurable system for optimization
 5. **Demonstrates production readiness**: Error handling, reporting, and swap-in architecture show engineered reliability
+
+---
+
+## P3.9 Rejection Path Validation
+
+While the trained PPO pilot achieved 100% admission (demonstrating high skill quality), the rejection path was validated through multiple channels:
+
+### Phase 1: Random Policy Rejection (Lines 28-31)
+- **10/10 skills rejected** (100% rejection rate)
+- Example failure: Ep 1 had Δr=-37.88, min(Δn)=-55.10
+- CDS gate check: -37.88 + (-55.10) = -92.98 < 0 → **REJECTED** ❌
+- This proves the gates correctly reject unsafe skills
+
+### Unit Test Validation
+The following tests explicitly verify rejection behavior:
+
+1. **`tests/test_integration.py::test_safety_rejection_logic`**
+   - Attempts to add a failed skill to SkillLibrary
+   - Asserts `add_skill()` returns `False`
+   - Asserts library count remains unchanged
+   - **Proves**: Rejected skills cannot enter the library
+
+2. **`tests/test_certification_gates.py`**
+   - Tests CDS/PDS gates with controlled inputs
+   - Example: Δr=-10.0, Δn=[-15.0, 5.0] → CDS fails: -10.0 + (-15.0) = -25.0 < 0
+   - **Proves**: Gates reject skills with negative improvement margins
+
+3. **`tests/test_end_to_end_pipeline.py::test_no_rejected_skills_in_library`**
+   - Runs full pipeline and verifies `library_size == admitted`
+   - Asserts rejected skills never enter library
+   - **Proves**: Safety invariant maintained end-to-end
+
+### Example Rejected Skill (from Phase 1)
+```json
+{
+  "skill_id": "skill_001",
+  "admitted": false,
+  "delta_r": -37.880,
+  "delta_n": [-55.097, 17.216],
+  "failure_reason": "delta_r + min(delta_n) + epsilon < 0 (got -37.880 + -55.097 = -92.977)"
+}
+```
+
+### Conclusion
+The rejection path is fully validated:
+- ✅ Phase 1 demonstrates real-world rejection (100% rejection rate with random policy)
+- ✅ Unit tests verify gate logic with controlled inputs
+- ✅ Integration tests verify rejected skills cannot enter library
+- ✅ End-to-end tests verify safety invariant throughout pipeline
+
+**The trained PPO pilot's 100% admission rate reflects skill quality, not gate weakness.**

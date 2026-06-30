@@ -300,23 +300,8 @@ def run_pipeline() -> dict:
         # Create MDN runtime selector
         mdn_selector = MDNRuntimeSelector(mdn_model)
         
-        # Build candidate skills from library
-        admitted_skills = library.get_admitted_skills()
-        candidates = []
-        for entry in admitted_skills:
-            candidates.append(CandidateSkillRecord(
-                skill_id=entry.skill_id,
-                delta_r=entry.delta_r,
-                delta_n=tuple(entry.delta_n),
-                is_certified=True,
-                gate_type=entry.gate_type,
-                admission_margin=entry.certificate.admission_margin,
-                epsilon=entry.certificate.epsilon,
-                baseline_id=entry.certificate.baseline_id,
-            ))
-        
-        print(f"[MDN] Built {len(candidates)} certified candidates from library")
-        print(f"[MDN] Running selection on 3 evaluation observations...\n")
+        print(f"[MDN] Using SkillLibrary with {library.count()} certified skills")
+        print(f"[MDN] Running selection through library.query_admissible()...\n")
         
         # Run MDN selection on 3 different observations
         eval_observations = [
@@ -327,7 +312,7 @@ def run_pipeline() -> dict:
         
         for idx, obs in enumerate(eval_observations, 1):
             try:
-                result = mdn_selector.select(obs, candidates)
+                result = mdn_selector.select_from_library(obs, library)
                 print(f"  Obs {idx}: Selected skill '{result.selected_skill_id}' "
                       f"(score={result.selected_score:.4f}, "
                       f"alpha=[{result.alpha[0]:.2f}, {result.alpha[1]:.2f}])")
