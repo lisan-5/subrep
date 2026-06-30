@@ -80,6 +80,23 @@ def test_mdn_two_objective_support_values_are_feasible_for_batched_contexts():
     assert torch.all(torch.sum(support_values, dim=-1) >= 1.0)
 
 
+def test_mdn_non_two_objective_support_values_keep_softplus_path():
+    """Non-2D support outputs should preserve the existing Softplus behavior."""
+    torch.manual_seed(0)
+    model = MotiveDecompositionNetwork(num_objectives=3)
+    with torch.no_grad():
+        model.support_head.weight.zero_()
+        model.support_head.bias.copy_(torch.tensor([2.0, 0.0, -2.0]))
+    context = torch.randn(4, 8)
+
+    _, support_values = model.forward_inference(context)
+    expected = torch.nn.functional.softplus(model.support_head.bias).expand_as(support_values)
+
+    assert support_values.shape == (4, 3)
+    assert torch.allclose(support_values, expected)
+    assert torch.any(support_values > 1.0)
+
+
 def test_mdn_outputs_are_finite():
     """Both heads should produce finite tensors without NaN or Inf values."""
     torch.manual_seed(0)
