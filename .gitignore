@@ -6,6 +6,8 @@ __pycache__/
 doc/
 # Generated dataset (run DataCollector locally to regenerate)
 data/raw/
+data/mdn_candidate_sets/
+data/mdn_candidate_sets_eval/
 # Trained model weights (run train_generator locally to regenerate)
 models/*
 !models/pilot_ppo.pt
@@ -15,5 +17,4 @@ plots/
 # Generated pipeline outputs (run demo/run_full_pipeline.py to regenerate)
 data/certificates.metta
 data/library.json
-
 
